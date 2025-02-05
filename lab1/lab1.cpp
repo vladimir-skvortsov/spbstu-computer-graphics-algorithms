@@ -11,7 +11,7 @@ ID3D11Device* g_pd3dDevice = nullptr;
 ID3D11DeviceContext* m_pDeviceContext = nullptr;
 IDXGISwapChain* g_pSwapChain = nullptr;
 ID3D11RenderTargetView* g_pRenderTargetView = nullptr;
-float CLEAR_COLOR[4] = { 0.2f, 0.2f, 0.4f, 1.0f };
+DirectX::XMFLOAT4 g_ClearColor = { 0.2f, 0.2f, 0.4f, 1.0f };
 
 // Function declarations
 LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
@@ -84,6 +84,28 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 // Handle messages
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
     switch (message) {
+        case WM_ERASEBKGND:
+            {
+                // Получаем DC окна
+                HDC hdc = (HDC)wParam;
+                RECT rect;
+                GetClientRect(hWnd, &rect);
+
+                // Преобразуем цвет очистки DirectX в цвет Windows GDI
+                COLORREF clearColor = RGB(
+                    (BYTE)(g_ClearColor.x * 255),
+                    (BYTE)(g_ClearColor.y * 255),
+                    (BYTE)(g_ClearColor.z * 255)
+                );
+
+                // Создаем кисть нужного цвета
+                HBRUSH brush = CreateSolidBrush(clearColor);
+                FillRect(hdc, &rect, brush);
+                DeleteObject(brush);
+
+                return TRUE; // Сообщаем Windows, что фон обработан
+            }
+            break;
         case WM_SIZE:
             if (g_pd3dDevice != nullptr) {
                 if (g_pRenderTargetView) {
@@ -146,6 +168,7 @@ HRESULT InitDevice(HWND hWnd) {
     sd.SampleDesc.Count = 1;
     sd.SampleDesc.Quality = 0;
     sd.Windowed = TRUE;
+    sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
 
     D3D_FEATURE_LEVEL featureLevel;
 
@@ -213,8 +236,11 @@ void CleanupDevice() {
 }
 
 void Render() {
-    // Clear with color
-    m_pDeviceContext->ClearRenderTargetView(g_pRenderTargetView, CLEAR_COLOR);
+    // Clear background buffer
+    m_pDeviceContext->ClearRenderTargetView(
+        g_pRenderTargetView,
+        reinterpret_cast<const float *>(&g_ClearColor)
+    );
 
     // Show frame
     g_pSwapChain->Present(0, 0);
