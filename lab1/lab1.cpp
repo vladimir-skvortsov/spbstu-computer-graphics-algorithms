@@ -34,15 +34,25 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         NULL,
         NULL,
         NULL,
-        L"DirectX App",
+        L"Laboratory work 1",
         NULL
     };
     RegisterClassEx(&wc);
 
     // Create window
-    HWND hWnd = CreateWindow(wc.lpszClassName, L"DirectX Application",
-        WS_OVERLAPPEDWINDOW, 100, 100, 1280, 720,
-        NULL, NULL, wc.hInstance, NULL);
+    HWND hWnd = CreateWindow(
+        wc.lpszClassName,
+        L"Laboratory work 1",
+        WS_OVERLAPPEDWINDOW,
+        100,
+        100,
+        1280,
+        720,
+        NULL,
+        NULL,
+        wc.hInstance,
+        NULL
+    );
 
     // Init DirectX
     if (FAILED(InitDevice(hWnd)))
