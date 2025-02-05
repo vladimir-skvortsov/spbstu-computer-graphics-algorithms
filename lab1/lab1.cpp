@@ -8,7 +8,7 @@
 
 // Global variables
 ID3D11Device* g_pd3dDevice = nullptr;
-ID3D11DeviceContext* g_pImmediateContext = nullptr;
+ID3D11DeviceContext* m_pDeviceContext = nullptr;
 IDXGISwapChain* g_pSwapChain = nullptr;
 ID3D11RenderTargetView* g_pRenderTargetView = nullptr;
 float CLEAR_COLOR[4] = { 0.2f, 0.2f, 0.4f, 1.0f };
@@ -20,8 +20,7 @@ void CleanupDevice();
 void Render();
 
 // Main function
-int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
-{
+int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
     // Register window
     WNDCLASSEX wc = {
         sizeof(WNDCLASSEX),
@@ -55,8 +54,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     );
 
     // Init DirectX
-    if (FAILED(InitDevice(hWnd)))
-    {
+    if (FAILED(InitDevice(hWnd))) {
         CleanupDevice();
         return 0;
     }
@@ -67,15 +65,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
     // Main loop
     MSG msg = { 0 };
-    while (msg.message != WM_QUIT)
-    {
-        if (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
-        {
+    while (msg.message != WM_QUIT) {
+        if (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
             TranslateMessage(&msg);
             DispatchMessage(&msg);
         }
-        else
-        {
+        else {
             Render();
         }
     }
@@ -87,39 +82,34 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 }
 
 // Handle messages
-LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
-{
-    switch (message)
-    {
-    case WM_SIZE:
-        if (g_pd3dDevice != nullptr)
-        {
-            if (g_pRenderTargetView)
-            {
-                g_pRenderTargetView->Release();
-                g_pRenderTargetView = nullptr;
+LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    switch (message) {
+        case WM_SIZE:
+            if (g_pd3dDevice != nullptr) {
+                if (g_pRenderTargetView) {
+                    g_pRenderTargetView->Release();
+                    g_pRenderTargetView = nullptr;
+                }
+
+                g_pSwapChain->ResizeBuffers(0, LOWORD(lParam), HIWORD(lParam), DXGI_FORMAT_UNKNOWN, 0);
+
+                // Recreate render target view
+                ID3D11Texture2D* pBackBuffer = nullptr;
+                g_pSwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), (LPVOID*)&pBackBuffer);
+                g_pd3dDevice->CreateRenderTargetView(pBackBuffer, nullptr, &g_pRenderTargetView);
+                pBackBuffer->Release();
             }
+            return 0;
 
-            g_pSwapChain->ResizeBuffers(0, LOWORD(lParam), HIWORD(lParam), DXGI_FORMAT_UNKNOWN, 0);
-
-            // Recreate render target view
-            ID3D11Texture2D* pBackBuffer = nullptr;
-            g_pSwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), (LPVOID*)&pBackBuffer);
-            g_pd3dDevice->CreateRenderTargetView(pBackBuffer, nullptr, &g_pRenderTargetView);
-            pBackBuffer->Release();
-        }
-        return 0;
-
-    case WM_DESTROY:
-        PostQuitMessage(0);
-        return 0;
+        case WM_DESTROY:
+            PostQuitMessage(0);
+            return 0;
     }
 
     return DefWindowProc(hWnd, message, wParam, lParam);
 }
 
-HRESULT InitDevice(HWND hWnd)
-{
+HRESULT InitDevice(HWND hWnd) {
     HRESULT hr = S_OK;
 
     RECT rc;
@@ -127,26 +117,20 @@ HRESULT InitDevice(HWND hWnd)
     UINT width = rc.right - rc.left;
     UINT height = rc.bottom - rc.top;
 
-    UINT createDeviceFlags = 0;
+    UINT flags  = 0;
 
-#ifdef _DEBUG
-    createDeviceFlags |= D3D11_CREATE_DEVICE_DEBUG;
-#endif
+    #ifdef _DEBUG
+        flags |= D3D11_CREATE_DEVICE_DEBUG;
+    #endif
 
-    D3D_DRIVER_TYPE driverTypes[] =
-    {
+    D3D_DRIVER_TYPE driverTypes[] = {
         D3D_DRIVER_TYPE_HARDWARE,
         D3D_DRIVER_TYPE_WARP,
         D3D_DRIVER_TYPE_REFERENCE,
     };
     UINT numDriverTypes = ARRAYSIZE(driverTypes);
 
-    D3D_FEATURE_LEVEL featureLevels[] =
-    {
-        D3D_FEATURE_LEVEL_11_0,
-        D3D_FEATURE_LEVEL_10_1,
-        D3D_FEATURE_LEVEL_10_0,
-    };
+    D3D_FEATURE_LEVEL featureLevels[] = { D3D_FEATURE_LEVEL_11_0 };
     UINT numFeatureLevels = ARRAYSIZE(featureLevels);
 
     DXGI_SWAP_CHAIN_DESC sd;
@@ -165,12 +149,25 @@ HRESULT InitDevice(HWND hWnd)
 
     D3D_FEATURE_LEVEL featureLevel;
 
-    for (UINT driverTypeIndex = 0; driverTypeIndex < numDriverTypes; driverTypeIndex++)
-    {
-        hr = D3D11CreateDeviceAndSwapChain(nullptr, driverTypes[driverTypeIndex], nullptr,
-            createDeviceFlags, featureLevels, numFeatureLevels,
-            D3D11_SDK_VERSION, &sd, &g_pSwapChain,
-            &g_pd3dDevice, &featureLevel, &g_pImmediateContext);
+    for (UINT driverTypeIndex = 0; driverTypeIndex < numDriverTypes; driverTypeIndex += 1) {
+        hr = D3D11CreateDeviceAndSwapChain(
+            nullptr,
+            driverTypes[driverTypeIndex],
+            nullptr,
+            flags,
+            featureLevels,
+            numFeatureLevels,
+            D3D11_SDK_VERSION,
+            &sd,
+            &g_pSwapChain,
+            &g_pd3dDevice,
+            &featureLevel,
+            &m_pDeviceContext
+        );
+
+        assert(featureLevel == D3D_FEATURE_LEVEL_11_0);
+        assert(SUCCEEDED(hr));
+
         if (SUCCEEDED(hr))
             break;
     }
@@ -188,7 +185,7 @@ HRESULT InitDevice(HWND hWnd)
     if (FAILED(hr))
         return hr;
 
-    g_pImmediateContext->OMSetRenderTargets(1, &g_pRenderTargetView, nullptr);
+    m_pDeviceContext->OMSetRenderTargets(1, &g_pRenderTargetView, nullptr);
 
     D3D11_VIEWPORT vp;
     vp.Width = (FLOAT)width;
@@ -197,25 +194,27 @@ HRESULT InitDevice(HWND hWnd)
     vp.MaxDepth = 1.0f;
     vp.TopLeftX = 0;
     vp.TopLeftY = 0;
-    g_pImmediateContext->RSSetViewports(1, &vp);
+    m_pDeviceContext->RSSetViewports(1, &vp);
 
     return S_OK;
 }
 
-void CleanupDevice()
-{
-    if (g_pImmediateContext) g_pImmediateContext->ClearState();
-
-    if (g_pRenderTargetView) g_pRenderTargetView->Release();
-    if (g_pSwapChain) g_pSwapChain->Release();
-    if (g_pImmediateContext) g_pImmediateContext->Release();
-    if (g_pd3dDevice) g_pd3dDevice->Release();
+void CleanupDevice() {
+    if (m_pDeviceContext)
+        m_pDeviceContext->ClearState();
+    if (g_pRenderTargetView)
+        g_pRenderTargetView->Release();
+    if (g_pSwapChain)
+        g_pSwapChain->Release();
+    if (m_pDeviceContext)
+        m_pDeviceContext->Release();
+    if (g_pd3dDevice)
+        g_pd3dDevice->Release();
 }
 
-void Render()
-{
+void Render() {
     // Clear with color
-    g_pImmediateContext->ClearRenderTargetView(g_pRenderTargetView, CLEAR_COLOR);
+    m_pDeviceContext->ClearRenderTargetView(g_pRenderTargetView, CLEAR_COLOR);
 
     // Show frame
     g_pSwapChain->Present(0, 0);
