@@ -128,6 +128,7 @@ HRESULT InitDevice(HWND hWnd)
     UINT height = rc.bottom - rc.top;
 
     UINT createDeviceFlags = 0;
+
 #ifdef _DEBUG
     createDeviceFlags |= D3D11_CREATE_DEVICE_DEBUG;
 #endif
@@ -201,7 +202,6 @@ HRESULT InitDevice(HWND hWnd)
     return S_OK;
 }
 
-// Cleanup device
 void CleanupDevice()
 {
     if (g_pImmediateContext) g_pImmediateContext->ClearState();
@@ -212,7 +212,6 @@ void CleanupDevice()
     if (g_pd3dDevice) g_pd3dDevice->Release();
 }
 
-// Render frame
 void Render()
 {
     // Clear with color
