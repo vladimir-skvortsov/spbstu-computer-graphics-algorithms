@@ -81,29 +81,25 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     return (int)msg.wParam;
 }
 
-// Handle messages
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
     switch (message) {
         case WM_ERASEBKGND:
             {
-                // Получаем DC окна
                 HDC hdc = (HDC)wParam;
                 RECT rect;
                 GetClientRect(hWnd, &rect);
 
-                // Преобразуем цвет очистки DirectX в цвет Windows GDI
                 COLORREF clearColor = RGB(
                     (BYTE)(g_ClearColor.x * 255),
                     (BYTE)(g_ClearColor.y * 255),
                     (BYTE)(g_ClearColor.z * 255)
                 );
 
-                // Создаем кисть нужного цвета
                 HBRUSH brush = CreateSolidBrush(clearColor);
                 FillRect(hdc, &rect, brush);
                 DeleteObject(brush);
 
-                return TRUE; // Сообщаем Windows, что фон обработан
+                return TRUE;
             }
             break;
         case WM_SIZE:
@@ -145,18 +141,10 @@ HRESULT InitDevice(HWND hWnd) {
         flags |= D3D11_CREATE_DEVICE_DEBUG;
     #endif
 
-    D3D_DRIVER_TYPE driverTypes[] = {
-        D3D_DRIVER_TYPE_HARDWARE,
-        D3D_DRIVER_TYPE_WARP,
-        D3D_DRIVER_TYPE_REFERENCE,
-    };
-    UINT numDriverTypes = ARRAYSIZE(driverTypes);
-
     D3D_FEATURE_LEVEL featureLevels[] = { D3D_FEATURE_LEVEL_11_0 };
     UINT numFeatureLevels = ARRAYSIZE(featureLevels);
 
-    DXGI_SWAP_CHAIN_DESC sd;
-    ZeroMemory(&sd, sizeof(sd));
+    DXGI_SWAP_CHAIN_DESC sd = {};
     sd.BufferCount = 1;
     sd.BufferDesc.Width = width;
     sd.BufferDesc.Height = height;
@@ -166,34 +154,29 @@ HRESULT InitDevice(HWND hWnd) {
     sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
     sd.OutputWindow = hWnd;
     sd.SampleDesc.Count = 1;
-    sd.SampleDesc.Quality = 0;
     sd.Windowed = TRUE;
     sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
 
     D3D_FEATURE_LEVEL featureLevel;
 
-    for (UINT driverTypeIndex = 0; driverTypeIndex < numDriverTypes; driverTypeIndex += 1) {
-        hr = D3D11CreateDeviceAndSwapChain(
-            nullptr,
-            driverTypes[driverTypeIndex],
-            nullptr,
-            flags,
-            featureLevels,
-            numFeatureLevels,
-            D3D11_SDK_VERSION,
-            &sd,
-            &g_pSwapChain,
-            &g_pd3dDevice,
-            &featureLevel,
-            &m_pDeviceContext
-        );
+    hr = D3D11CreateDeviceAndSwapChain(
+        nullptr,
+        D3D_DRIVER_TYPE_HARDWARE,
+        nullptr,
+        flags,
+        featureLevels,
+        numFeatureLevels,
+        D3D11_SDK_VERSION,
+        &sd,
+        &g_pSwapChain,
+        &g_pd3dDevice,
+        &featureLevel,
+        &m_pDeviceContext
+    );
 
-        assert(featureLevel == D3D_FEATURE_LEVEL_11_0);
-        assert(SUCCEEDED(hr));
+    assert(featureLevel == D3D_FEATURE_LEVEL_11_0);
+    assert(SUCCEEDED(hr));
 
-        if (SUCCEEDED(hr))
-            break;
-    }
     if (FAILED(hr))
         return hr;
 
@@ -213,10 +196,7 @@ HRESULT InitDevice(HWND hWnd) {
     D3D11_VIEWPORT vp;
     vp.Width = (FLOAT)width;
     vp.Height = (FLOAT)height;
-    vp.MinDepth = 0.0f;
     vp.MaxDepth = 1.0f;
-    vp.TopLeftX = 0;
-    vp.TopLeftY = 0;
     m_pDeviceContext->RSSetViewports(1, &vp);
 
     return S_OK;
@@ -229,8 +209,6 @@ void CleanupDevice() {
         g_pRenderTargetView->Release();
     if (g_pSwapChain)
         g_pSwapChain->Release();
-    if (m_pDeviceContext)
-        m_pDeviceContext->Release();
     if (g_pd3dDevice)
         g_pd3dDevice->Release();
 }
