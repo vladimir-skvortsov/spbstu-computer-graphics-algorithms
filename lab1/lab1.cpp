@@ -29,12 +29,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         0L,
         0L,
         hInstance,
-        NULL,
-        NULL,
-        NULL,
-        NULL,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
         L"Laboratory work 1",
-        NULL
+        nullptr
     };
     RegisterClassEx(&wc);
 
@@ -47,10 +47,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         100,
         1280,
         720,
-        NULL,
-        NULL,
+        nullptr,
+        nullptr,
         wc.hInstance,
-        NULL
+        nullptr
     );
 
     // Init DirectX
