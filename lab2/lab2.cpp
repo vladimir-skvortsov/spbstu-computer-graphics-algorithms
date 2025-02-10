@@ -15,57 +15,38 @@ IDXGISwapChain* g_pSwapChain = nullptr;
 ID3D11RenderTargetView* g_pRenderTargetView = nullptr;
 DirectX::XMFLOAT4 g_ClearColor = { 0.2f, 0.2f, 0.4f, 1.0f };
 
-// Function declarations
+// Vertex buffer and shaders
+ID3D11Buffer* g_pVertexBuffer = nullptr;
+ID3D11InputLayout* g_pVertexLayout = nullptr;
+ID3D11VertexShader* g_pVertexShader = nullptr;
+ID3D11PixelShader* g_pPixelShader = nullptr;
+
+// Vertex data structure
+struct Vertex {
+    DirectX::XMFLOAT3 position;
+    DirectX::XMFLOAT4 color;
+};
+
 LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 HRESULT InitDevice(HWND hWnd);
 void CleanupDevice();
 void Render();
+HRESULT CreateTriangleResources();
 
-// Main function
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
-    // Register window
-    WNDCLASSEX wc = {
-        sizeof(WNDCLASSEX),
-        CS_CLASSDC,
-        WndProc,
-        0L,
-        0L,
-        hInstance,
-        nullptr,
-        nullptr,
-        nullptr,
-        nullptr,
-        L"Laboratory work 1",
-        nullptr
-    };
+    WNDCLASSEX wc = { sizeof(WNDCLASSEX), CS_CLASSDC, WndProc, 0L, 0L, hInstance, nullptr, nullptr, nullptr, nullptr, L"TriangleApp", nullptr };
     RegisterClassEx(&wc);
 
-    // Create window
-    HWND hWnd = CreateWindow(
-        wc.lpszClassName,
-        L"Laboratory work 1",
-        WS_OVERLAPPEDWINDOW,
-        100,
-        100,
-        1280,
-        720,
-        nullptr,
-        nullptr,
-        wc.hInstance,
-        nullptr
-    );
+    HWND hWnd = CreateWindow(wc.lpszClassName, L"Triangle App", WS_OVERLAPPEDWINDOW, 100, 100, 1280, 720, nullptr, nullptr, wc.hInstance, nullptr);
 
-    // Init DirectX
     if (FAILED(InitDevice(hWnd))) {
         CleanupDevice();
         return 0;
     }
 
-    // Show window
     ShowWindow(hWnd, nCmdShow);
     UpdateWindow(hWnd);
 
-    // Main loop
     MSG msg = { 0 };
     while (msg.message != WM_QUIT) {
         if (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
@@ -77,7 +58,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         }
     }
 
-    // Cleanup
     CleanupDevice();
     UnregisterClass(wc.lpszClassName, wc.hInstance);
     return (int)msg.wParam;
@@ -85,48 +65,25 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
     switch (message) {
-        case WM_ERASEBKGND:
-            {
-                HDC hdc = (HDC)wParam;
-                RECT rect;
-                GetClientRect(hWnd, &rect);
+    case WM_SIZE:
+        if (g_pd3dDevice != nullptr && g_pSwapChain != nullptr) {
+            if (g_pRenderTargetView) { g_pRenderTargetView->Release(); g_pRenderTargetView = nullptr; }
+            g_pSwapChain->ResizeBuffers(0, LOWORD(lParam), HIWORD(lParam), DXGI_FORMAT_UNKNOWN, 0);
 
-                COLORREF clearColor = RGB(
-                    (BYTE)(g_ClearColor.x * 255),
-                    (BYTE)(g_ClearColor.y * 255),
-                    (BYTE)(g_ClearColor.z * 255)
-                );
-
-                HBRUSH brush = CreateSolidBrush(clearColor);
-                FillRect(hdc, &rect, brush);
-                DeleteObject(brush);
-
-                return TRUE;
-            }
-            break;
-        case WM_SIZE:
-            if (g_pd3dDevice != nullptr) {
-                if (g_pRenderTargetView) {
-                    g_pRenderTargetView->Release();
-                    g_pRenderTargetView = nullptr;
-                }
-
-                g_pSwapChain->ResizeBuffers(0, LOWORD(lParam), HIWORD(lParam), DXGI_FORMAT_UNKNOWN, 0);
-
-                // Recreate render target view
-                ID3D11Texture2D* pBackBuffer = nullptr;
-                g_pSwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), (LPVOID*)&pBackBuffer);
-                g_pd3dDevice->CreateRenderTargetView(pBackBuffer, nullptr, &g_pRenderTargetView);
-                pBackBuffer->Release();
-            }
-            return 0;
-
-        case WM_DESTROY:
-            PostQuitMessage(0);
-            return 0;
+            ID3D11Texture2D* pBackBuffer = nullptr;
+            g_pSwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), (LPVOID*)&pBackBuffer);
+            g_pd3dDevice->CreateRenderTargetView(pBackBuffer, nullptr, &g_pRenderTargetView);
+            pBackBuffer->Release();
+            m_pDeviceContext->OMSetRenderTargets(1, &g_pRenderTargetView, nullptr);
+        }
+        break;
+    case WM_DESTROY:
+        PostQuitMessage(0);
+        break;
+    default:
+        return DefWindowProc(hWnd, message, wParam, lParam);
     }
-
-    return DefWindowProc(hWnd, message, wParam, lParam);
+    return 0;
 }
 
 HRESULT InitDevice(HWND hWnd) {
@@ -137,14 +94,10 @@ HRESULT InitDevice(HWND hWnd) {
     UINT width = rc.right - rc.left;
     UINT height = rc.bottom - rc.top;
 
-    UINT flags  = 0;
-
-    #ifdef _DEBUG
-        flags |= D3D11_CREATE_DEVICE_DEBUG;
-    #endif
-
-    D3D_FEATURE_LEVEL featureLevels[] = { D3D_FEATURE_LEVEL_11_0 };
-    UINT numFeatureLevels = ARRAYSIZE(featureLevels);
+    UINT flags = 0;
+#ifdef _DEBUG
+    flags |= D3D11_CREATE_DEVICE_DEBUG;
+#endif
 
     DXGI_SWAP_CHAIN_DESC sd = {};
     sd.BufferCount = 2;
@@ -158,33 +111,25 @@ HRESULT InitDevice(HWND hWnd) {
     sd.SampleDesc.Count = 1;
     sd.SampleDesc.Quality = 0;
     sd.Windowed = TRUE;
-    sd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-    sd.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
 
     D3D_FEATURE_LEVEL featureLevel;
-
     hr = D3D11CreateDeviceAndSwapChain(
         nullptr,
         D3D_DRIVER_TYPE_HARDWARE,
         nullptr,
         flags,
-        featureLevels,
-        numFeatureLevels,
+        nullptr,
+        0,
         D3D11_SDK_VERSION,
         &sd,
         &g_pSwapChain,
         &g_pd3dDevice,
         &featureLevel,
-        &m_pDeviceContext
-    );
-
-    assert(featureLevel == D3D_FEATURE_LEVEL_11_0);
-    assert(SUCCEEDED(hr));
+        &m_pDeviceContext);
 
     if (FAILED(hr))
         return hr;
 
-    // Create render target view
     ID3D11Texture2D* pBackBuffer = nullptr;
     hr = g_pSwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), (LPVOID*)&pBackBuffer);
     if (FAILED(hr))
@@ -197,36 +142,133 @@ HRESULT InitDevice(HWND hWnd) {
 
     m_pDeviceContext->OMSetRenderTargets(1, &g_pRenderTargetView, nullptr);
 
-    D3D11_VIEWPORT viewport;
-    viewport.TopLeftX = 0.0f;
-    viewport.TopLeftY = 0.0f;
-    viewport.Width = (FLOAT)width;
-    viewport.Height = (FLOAT)height;
-    viewport.MinDepth = 0.0f;
-    viewport.MaxDepth = 1.0f;
-    m_pDeviceContext->RSSetViewports(1, &viewport);
+    D3D11_VIEWPORT vp;
+    vp.TopLeftX = 0;
+    vp.TopLeftY = 0;
+    vp.Width = (FLOAT)width;
+    vp.Height = (FLOAT)height;
+    vp.MinDepth = 0.0f;
+    vp.MaxDepth = 1.0f;
+    m_pDeviceContext->RSSetViewports(1, &vp);
+
+    // Create triangle resources (vertex buffer, shader, etc.)
+    hr = CreateTriangleResources();
+    if (FAILED(hr))
+        return hr;
+
+    return S_OK;
+}
+
+HRESULT CreateTriangleResources() {
+    HRESULT hr = S_OK;
+
+    // Define the triangle vertices
+    Vertex vertices[] = {
+        { DirectX::XMFLOAT3(0.0f,  0.5f, 0.0f), DirectX::XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f) },
+        { DirectX::XMFLOAT3(0.5f, -0.5f, 0.0f), DirectX::XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f) },
+        { DirectX::XMFLOAT3(-0.5f, -0.5f, 0.0f), DirectX::XMFLOAT4(0.0f, 0.0f, 1.0f, 1.0f) }
+    };
+
+    // Create the vertex buffer
+    D3D11_BUFFER_DESC bd = {};
+    bd.Usage = D3D11_USAGE_DEFAULT;
+    bd.ByteWidth = sizeof(vertices);
+    bd.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+    D3D11_SUBRESOURCE_DATA initData = {};
+    initData.pSysMem = vertices;
+
+    hr = g_pd3dDevice->CreateBuffer(&bd, &initData, &g_pVertexBuffer);
+    if (FAILED(hr))
+        return hr;
+
+    // Load shaders (hard-coded shaders for simplicity)
+    const char* vsCode = R"(
+        struct VSInput {
+            float3 position : POSITION;
+            float4 color : COLOR;
+        };
+
+        struct PSInput {
+            float4 position : SV_POSITION;
+            float4 color : COLOR;
+        };
+
+        PSInput main(VSInput input) {
+            PSInput output;
+            output.position = float4(input.position, 1.0f);
+            output.color = input.color;
+            return output;
+        }
+    )";
+
+    const char* psCode = R"(
+        struct PSInput {
+            float4 position : SV_POSITION;
+            float4 color : COLOR;
+        };
+
+        float4 main(PSInput input) : SV_TARGET {
+            return input.color;
+        }
+    )";
+
+    // Compile and create shaders
+    ID3DBlob* vsBlob = nullptr;
+    ID3DBlob* psBlob = nullptr;
+
+    D3DCompile(vsCode, strlen(vsCode), nullptr, nullptr, nullptr, "main", "vs_4_0", 0, 0, &vsBlob, nullptr);
+    hr = g_pd3dDevice->CreateVertexShader(vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), nullptr, &g_pVertexShader);
+    if (FAILED(hr))
+        return hr;
+
+    D3DCompile(psCode, strlen(psCode), nullptr, nullptr, nullptr, "main", "ps_4_0", 0, 0, &psBlob, nullptr);
+    hr = g_pd3dDevice->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(), nullptr, &g_pPixelShader);
+    if (FAILED(hr))
+        return hr;
+
+    // Create input layout
+    D3D11_INPUT_ELEMENT_DESC layout[] = {
+        { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+        { "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0 }
+    };
+    hr = g_pd3dDevice->CreateInputLayout(layout, ARRAYSIZE(layout), vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), &g_pVertexLayout);
+    vsBlob->Release();
+    psBlob->Release();
+    if (FAILED(hr))
+        return hr;
 
     return S_OK;
 }
 
 void CleanupDevice() {
-    if (m_pDeviceContext)
-        m_pDeviceContext->ClearState();
-    if (g_pRenderTargetView)
-        g_pRenderTargetView->Release();
-    if (g_pSwapChain)
-        g_pSwapChain->Release();
-    if (g_pd3dDevice)
-        g_pd3dDevice->Release();
+    if (m_pDeviceContext) m_pDeviceContext->ClearState();
+    if (g_pVertexBuffer) g_pVertexBuffer->Release();
+    if (g_pVertexLayout) g_pVertexLayout->Release();
+    if (g_pVertexShader) g_pVertexShader->Release();
+    if (g_pPixelShader) g_pPixelShader->Release();
+    if (g_pRenderTargetView) g_pRenderTargetView->Release();
+    if (g_pSwapChain) g_pSwapChain->Release();
+    if (g_pd3dDevice) g_pd3dDevice->Release();
 }
 
 void Render() {
-    // Clear background buffer
-    m_pDeviceContext->ClearRenderTargetView(
-        g_pRenderTargetView,
-        reinterpret_cast<const float *>(&g_ClearColor)
-    );
+    // Clear the render target
+    m_pDeviceContext->ClearRenderTargetView(g_pRenderTargetView, reinterpret_cast<const float*>(&g_ClearColor));
 
-    // Show frame
+    // Set vertex buffer and input layout
+    UINT stride = sizeof(Vertex);
+    UINT offset = 0;
+    m_pDeviceContext->IASetVertexBuffers(0, 1, &g_pVertexBuffer, &stride, &offset);
+    m_pDeviceContext->IASetInputLayout(g_pVertexLayout);
+
+    // Set shaders
+    m_pDeviceContext->VSSetShader(g_pVertexShader, nullptr, 0);
+    m_pDeviceContext->PSSetShader(g_pPixelShader, nullptr, 0);
+
+    // Draw the triangle
+    m_pDeviceContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    m_pDeviceContext->Draw(3, 0);
+
+    // Present the rendered frame
     g_pSwapChain->Present(0, 0);
 }
