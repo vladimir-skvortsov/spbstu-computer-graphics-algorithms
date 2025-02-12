@@ -34,10 +34,33 @@ void Render();
 HRESULT CreateTriangleResources();
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
-    WNDCLASSEX wc = { sizeof(WNDCLASSEX), CS_CLASSDC, WndProc, 0L, 0L, hInstance, nullptr, nullptr, nullptr, nullptr, L"TriangleApp", nullptr };
+    WNDCLASSEX wc = {
+        sizeof(WNDCLASSEX),
+        CS_CLASSDC, WndProc,
+        0L,
+        0L,
+        hInstance,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        L"Laboratory work 2",
+        nullptr
+    };
     RegisterClassEx(&wc);
 
-    HWND hWnd = CreateWindow(wc.lpszClassName, L"Triangle App", WS_OVERLAPPEDWINDOW, 100, 100, 1280, 720, nullptr, nullptr, wc.hInstance, nullptr);
+    HWND hWnd = CreateWindow(
+        wc.lpszClassName,
+        L"Laboratory work 2",
+        WS_OVERLAPPEDWINDOW,
+        100,
+        100,
+        1280, 720,
+        nullptr,
+        nullptr,
+        wc.hInstance,
+        nullptr
+    );
 
     if (FAILED(InitDevice(hWnd))) {
         CleanupDevice();
@@ -216,12 +239,20 @@ HRESULT CreateTriangleResources() {
     ID3DBlob* vsBlob = nullptr;
     ID3DBlob* psBlob = nullptr;
 
-    D3DCompile(vsCode, strlen(vsCode), nullptr, nullptr, nullptr, "main", "vs_4_0", 0, 0, &vsBlob, nullptr);
+    hr = D3DCompileFromFile(L"vs.hlsl", nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE,
+        "main", "vs_4_0", 0, 0, &vsBlob, nullptr);
+    if (FAILED(hr))
+        return hr;
+
+    hr = D3DCompileFromFile(L"ps.hlsl", nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE,
+        "main", "ps_4_0", 0, 0, &psBlob, nullptr);
+    if (FAILED(hr))
+        return hr;
+
     hr = g_pd3dDevice->CreateVertexShader(vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), nullptr, &g_pVertexShader);
     if (FAILED(hr))
         return hr;
 
-    D3DCompile(psCode, strlen(psCode), nullptr, nullptr, nullptr, "main", "ps_4_0", 0, 0, &psBlob, nullptr);
     hr = g_pd3dDevice->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(), nullptr, &g_pPixelShader);
     if (FAILED(hr))
         return hr;
