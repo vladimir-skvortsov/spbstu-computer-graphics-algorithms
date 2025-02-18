@@ -1,33 +1,26 @@
-cbuffer ModelBuffer : register(b0)
-{
-    float4x4 model;
+cbuffer ModelBuffer : register(b0) {
+    matrix m;
 };
 
-cbuffer VPBuffer : register(b1)
-{
-    float4x4 vp;
+cbuffer VPBuffer : register(b1) {
+    matrix vp;
 };
 
-struct VSInput
-{
-    float3 pos : POSITION;
+struct VS_INPUT {
+    float3 position : POSITION;
     float4 color : COLOR;
 };
 
-struct VSOutput
-{
-    float4 pos : SV_Position;
+struct PS_INPUT {
+    float4 position : SV_POSITION;
     float4 color : COLOR;
 };
 
-VSOutput main(VSInput input)
-{
-    VSOutput output;
-    
-    float4 worldPos = mul(float4(input.pos, 1.0), model);
-    output.pos = mul(worldPos, vp);
-    
+PS_INPUT main(VS_INPUT input) {
+    PS_INPUT output;
+    float4 pos = float4(input.position, 1.0);
+    output.position = mul(pos, m);
+    output.position = mul(output.position, vp);
     output.color = input.color;
-    
     return output;
 }
