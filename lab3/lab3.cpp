@@ -260,7 +260,12 @@ HRESULT InitDevice(HWND hWnd) {
     if (FAILED(hr))
         return hr;
 
-    hr = g_pd3dDevice->CreateBuffer(&cbDesc, nullptr, &g_pVPBuffer);
+    D3D11_BUFFER_DESC vpDesc = {};
+    vpDesc.Usage = D3D11_USAGE_DYNAMIC;
+    vpDesc.ByteWidth = sizeof(XMMATRIX);
+    vpDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    vpDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+    hr = g_pd3dDevice->CreateBuffer(&vpDesc, nullptr, &g_pVPBuffer);
     if (FAILED(hr))
         return hr;
 
@@ -385,7 +390,13 @@ void Render() {
     XMMATRIX vpT = XMMatrixTranspose(vp);
 
     m_pDeviceContext->UpdateSubresource(g_pModelBuffer, 0, nullptr, &mT, 0, 0);
-    m_pDeviceContext->UpdateSubresource(g_pVPBuffer, 0, nullptr, &vpT, 0, 0);
+
+    D3D11_MAPPED_SUBRESOURCE mappedVP;
+    HRESULT hr = m_pDeviceContext->Map(g_pVPBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedVP);
+    if (SUCCEEDED(hr)) {
+        memcpy(mappedVP.pData, &vpT, sizeof(XMMATRIX));
+        m_pDeviceContext->Unmap(g_pVPBuffer, 0);
+    }
 
     m_pDeviceContext->VSSetConstantBuffers(0, 1, &g_pModelBuffer);
     m_pDeviceContext->VSSetConstantBuffers(1, 1, &g_pVPBuffer);
