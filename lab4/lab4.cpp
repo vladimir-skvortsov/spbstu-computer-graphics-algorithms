@@ -4,6 +4,7 @@
 #include <DirectXMath.h>
 #include <d3dcompiler.h>
 #include <chrono>
+#include "DDSTextureLoader.h"
 
 #pragma comment(lib, "d3dcompiler.lib")
 #pragma comment(lib, "d3d11.lib")
@@ -16,6 +17,7 @@ ID3D11Device* g_pd3dDevice = nullptr;
 ID3D11DeviceContext* m_pDeviceContext = nullptr;
 IDXGISwapChain* g_pSwapChain = nullptr;
 ID3D11RenderTargetView* g_pRenderTargetView = nullptr;
+ID3D11DepthStencilView* g_pDepthStencilView = nullptr;
 const float g_ClearColor[4] = {0.2f, 0.2f, 0.4f, 1.0f};
 
 // Buffers and shaders
@@ -28,12 +30,25 @@ ID3D11Buffer* g_pVertexBuffer = nullptr;
 ID3D11Buffer* g_pModelBuffer = nullptr;
 ID3D11Buffer* g_pVPBuffer = nullptr;
 
-// Camera control
-float g_CamYaw = 0.0f;
-float g_CamPitch = 0.5f;
+// Cube
+ID3D11ShaderResourceView* g_pCubeTextureRV = nullptr;
+ID3D11SamplerState* g_pSamplerLinear = nullptr;
 
-// Cube control
+// Skybox
+ID3D11VertexShader* g_pSkyboxVS = nullptr;
+ID3D11PixelShader* g_pSkyboxPS = nullptr;
+ID3D11InputLayout* g_pSkyboxInputLayout = nullptr;
+ID3D11Buffer* g_pSkyboxVertexBuffer = nullptr;
+ID3D11Buffer* g_pSkyboxVPBuffer = nullptr;
+ID3D11ShaderResourceView* g_pSkyboxTextureRV = nullptr;
+
+// Camera control
 float g_CubeAngle = 0.0f;
+float g_CameraAngle = 0.0f;
+bool   g_MouseDragging = false;
+POINT  g_LastMousePos = { 0, 0 };
+float  g_CameraAzimuth = 0.0f;
+float  g_CameraElevation = 0.0f;
 
 LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 HRESULT InitDevice(HWND hWnd);
@@ -43,51 +58,105 @@ HRESULT CreateCubeResources();
 
 struct Vertex {
     XMFLOAT3 position;
-    XMFLOAT4 color;
+    float u, v;
+};
+
+struct SkyboxVertex {
+    float x, y, z;
 };
 
 Vertex g_CubeVertices[] = {
-    { XMFLOAT3(-0.5f, -0.5f, 0.5f), XMFLOAT4(247.0f / 255.0f, 37.0f / 255.0f, 133.0f / 255.0f, 1) },
-    { XMFLOAT3( 0.5f, -0.5f, 0.5f), XMFLOAT4(247.0f / 255.0f, 37.0f / 255.0f, 133.0f / 255.0f, 1) },
-    { XMFLOAT3( 0.5f, 0.5f, 0.5f), XMFLOAT4(247.0f / 255.0f, 37.0f / 255.0f, 133.0f / 255.0f, 1) },
-    { XMFLOAT3(-0.5f, -0.5f, 0.5f), XMFLOAT4(247.0f / 255.0f, 37.0f / 255.0f, 133.0f / 255.0f, 1) },
-    { XMFLOAT3( 0.5f, 0.5f, 0.5f), XMFLOAT4(247.0f / 255.0f, 37.0f / 255.0f, 133.0f / 255.0f, 1) },
-    { XMFLOAT3(-0.5f, 0.5f, 0.5f), XMFLOAT4(247.0f / 255.0f, 37.0f / 255.0f, 133.0f / 255.0f, 1) },
+    {XMFLOAT3(-0.5f, -0.5f, 0.5f), 0.0f, 1.0f},
+    {XMFLOAT3(0.5f, -0.5f, 0.5f), 1.0f, 1.0f},
+    {XMFLOAT3(0.5f, 0.5f, 0.5f), 1.0f, 0.0f},
 
-    { XMFLOAT3(-0.5f, -0.5f, -0.5f), XMFLOAT4(114.0f / 255.0f, 9.0f / 255.0f, 183.0f / 255.0f, 1) },
-    { XMFLOAT3( 0.5f, 0.5f, -0.5f), XMFLOAT4(114.0f / 255.0f, 9.0f / 255.0f, 183.0f / 255.0f, 1) },
-    { XMFLOAT3( 0.5f, -0.5f, -0.5f), XMFLOAT4(114.0f / 255.0f, 9.0f / 255.0f, 183.0f / 255.0f, 1) },
-    { XMFLOAT3(-0.5f, -0.5f, -0.5f), XMFLOAT4(114.0f / 255.0f, 9.0f / 255.0f, 183.0f / 255.0f, 1) },
-    { XMFLOAT3(-0.5f, 0.5f, -0.5f), XMFLOAT4(114.0f / 255.0f, 9.0f / 255.0f, 183.0f / 255.0f, 1) },
-    { XMFLOAT3( 0.5f, 0.5f, -0.5f), XMFLOAT4(114.0f / 255.0f, 9.0f / 255.0f, 183.0f / 255.0f, 1) },
+    {XMFLOAT3(-0.5f, -0.5f, 0.5f), 0.0f, 1.0f},
+    {XMFLOAT3(0.5f, 0.5f, 0.5f), 1.0f, 0.0f},
+    {XMFLOAT3(-0.5f, 0.5f, 0.5f), 0.0f, 0.0f},
 
-    { XMFLOAT3(-0.5f, -0.5f, -0.5f), XMFLOAT4(72.0f / 255.0f, 12.0f / 255.0f, 168.0f / 255.0f, 1) },
-    { XMFLOAT3(-0.5f, -0.5f, 0.5f), XMFLOAT4(72.0f / 255.0f, 12.0f / 255.0f, 168.0f / 255.0f, 1) },
-    { XMFLOAT3(-0.5f, 0.5f, 0.5f), XMFLOAT4(72.0f / 255.0f, 12.0f / 255.0f, 168.0f / 255.0f, 1) },
-    { XMFLOAT3(-0.5f, -0.5f, -0.5f), XMFLOAT4(72.0f / 255.0f, 12.0f / 255.0f, 168.0f / 255.0f, 1) },
-    { XMFLOAT3(-0.5f, 0.5f, 0.5f), XMFLOAT4(72.0f / 255.0f, 12.0f / 255.0f, 168.0f / 255.0f, 1) },
-    { XMFLOAT3(-0.5f, 0.5f, -0.5f), XMFLOAT4(72.0f / 255.0f, 12.0f / 255.0f, 168.0f / 255.0f, 1) },
+    {XMFLOAT3(0.5f, -0.5f, -0.5f), 0.0f, 1.0f},
+    {XMFLOAT3(-0.5f, -0.5f, -0.5f), 1.0f, 1.0f},
+    {XMFLOAT3(-0.5f, 0.5f, -0.5f), 1.0f, 0.0f},
 
-    { XMFLOAT3(0.5f, -0.5f, -0.5f), XMFLOAT4(58.0f / 255.0f, 12.0f / 255.0f, 163.0f / 255.0f, 1) },
-    { XMFLOAT3(0.5f, 0.5f,  0.5f), XMFLOAT4(58.0f / 255.0f, 12.0f / 255.0f, 163.0f / 255.0f, 1) },
-    { XMFLOAT3(0.5f, -0.5f, 0.5f), XMFLOAT4(58.0f / 255.0f, 12.0f / 255.0f, 163.0f / 255.0f, 1) },
-    { XMFLOAT3(0.5f, -0.5f, -0.5f), XMFLOAT4(58.0f / 255.0f, 12.0f / 255.0f, 163.0f / 255.0f, 1) },
-    { XMFLOAT3(0.5f, 0.5f, -0.5f), XMFLOAT4(58.0f / 255.0f, 12.0f / 255.0f, 163.0f / 255.0f, 1) },
-    { XMFLOAT3(0.5f, 0.5f, 0.5f), XMFLOAT4(58.0f / 255.0f, 12.0f / 255.0f, 163.0f / 255.0f, 1) },
+    {XMFLOAT3(0.5f, -0.5f, -0.5f), 0.0f, 1.0f},
+    {XMFLOAT3(-0.5f, 0.5f, -0.5f), 1.0f, 0.0f},
+    {XMFLOAT3(0.5f, 0.5f, -0.5f), 0.0f, 0.0f},
 
-    { XMFLOAT3(-0.5f, 0.5f, 0.5f), XMFLOAT4(67.0f / 255.0f, 97.0f / 255.0f, 238.0f / 255.0f, 1) },
-    { XMFLOAT3( 0.5f, 0.5f, 0.5f), XMFLOAT4(67.0f / 255.0f, 97.0f / 255.0f, 238.0f / 255.0f, 1) },
-    { XMFLOAT3( 0.5f, 0.5f, -0.5f), XMFLOAT4(67.0f / 255.0f, 97.0f / 255.0f, 238.0f / 255.0f, 1) },
-    { XMFLOAT3(-0.5f, 0.5f, 0.5f), XMFLOAT4(67.0f / 255.0f, 97.0f / 255.0f, 238.0f / 255.0f, 1) },
-    { XMFLOAT3( 0.5f, 0.5f, -0.5f), XMFLOAT4(67.0f / 255.0f, 97.0f / 255.0f, 238.0f / 255.0f, 1) },
-    { XMFLOAT3(-0.5f, 0.5f, -0.5f), XMFLOAT4(67.0f / 255.0f, 97.0f / 255.0f, 238.0f / 255.0f, 1) },
+    {XMFLOAT3(-0.5f, -0.5f, -0.5f), 0.0f, 1.0f},
+    {XMFLOAT3(-0.5f, -0.5f, 0.5f), 1.0f, 1.0f},
+    {XMFLOAT3(-0.5f, 0.5f, 0.5f), 1.0f, 0.0f},
 
-    { XMFLOAT3(-0.5f, -0.5f, 0.5f), XMFLOAT4(76.0f / 255.0f, 201.0f / 255.0f, 240.0f / 255.0f, 1) },
-    { XMFLOAT3( 0.5f, -0.5f, -0.5f), XMFLOAT4(76.0f / 255.0f, 201.0f / 255.0f, 240.0f / 255.0f, 1) },
-    { XMFLOAT3( 0.5f, -0.5f, 0.5f), XMFLOAT4(76.0f / 255.0f, 201.0f / 255.0f, 240.0f / 255.0f, 1) },
-    { XMFLOAT3(-0.5f, -0.5f, 0.5f), XMFLOAT4(76.0f / 255.0f, 201.0f / 255.0f, 240.0f / 255.0f, 1) },
-    { XMFLOAT3(-0.5f, -0.5f, -0.5f), XMFLOAT4(76.0f / 255.0f, 201.0f / 255.0f, 240.0f / 255.0f, 1) },
-    { XMFLOAT3( 0.5f, -0.5f, -0.5f), XMFLOAT4(76.0f / 255.0f, 201.0f / 255.0f, 240.0f / 255.0f, 1) },
+    {XMFLOAT3(-0.5f, -0.5f, -0.5f), 0.0f, 1.0f},
+    {XMFLOAT3(-0.5f, 0.5f, 0.5f), 1.0f, 0.0f},
+    {XMFLOAT3(-0.5f, 0.5f, -0.5f), 0.0f, 0.0f},
+
+    {XMFLOAT3(0.5f, -0.5f, 0.5f), 0.0f, 1.0f},
+    {XMFLOAT3(0.5f, -0.5f, -0.5f), 1.0f, 1.0f},
+    {XMFLOAT3(0.5f, 0.5f, -0.5f), 1.0f, 0.0f},
+
+    {XMFLOAT3(0.5f, -0.5f, 0.5f), 0.0f, 1.0f},
+    {XMFLOAT3(0.5f, 0.5f, -0.5f), 1.0f, 0.0f},
+    {XMFLOAT3(0.5f, 0.5f, 0.5f), 0.0f, 0.0f},
+
+    {XMFLOAT3(-0.5f, 0.5f, 0.5f), 0.0f, 1.0f},
+    {XMFLOAT3(0.5f, 0.5f, 0.5f), 1.0f, 1.0f},
+    {XMFLOAT3(0.5f, 0.5f, -0.5f), 1.0f, 0.0f},
+
+    {XMFLOAT3(-0.5f, 0.5f, 0.5f), 0.0f, 1.0f},
+    {XMFLOAT3(0.5f, 0.5f, -0.5f), 1.0f, 0.0f},
+    {XMFLOAT3(-0.5f, 0.5f, -0.5f), 0.0f, 0.0f},
+
+    {XMFLOAT3(-0.5f, -0.5f, -0.5f), 0.0f, 1.0f},
+    {XMFLOAT3(0.5f, -0.5f, -0.5f), 1.0f, 1.0f},
+    {XMFLOAT3(0.5f, -0.5f, 0.5f), 1.0f, 0.0f},
+
+    {XMFLOAT3(-0.5f, -0.5f, -0.5f), 0.0f, 1.0f},
+    {XMFLOAT3(0.5f, -0.5f, 0.5f), 1.0f, 0.0f},
+    {XMFLOAT3(-0.5f, -0.5f, 0.5f), 0.0f, 0.0f},
+};
+
+SkyboxVertex g_SkyboxVertices[] = {
+    { -1.0f, -1.0f, -1.0f },
+    { -1.0f, 1.0f, -1.0f },
+    {  1.0f, 1.0f, -1.0f },
+    { -1.0f, -1.0f, -1.0f },
+    {  1.0f, 1.0f, -1.0f },
+    {  1.0f, -1.0f, -1.0f },
+
+    {  1.0f, -1.0f, 1.0f },
+    {  1.0f, 1.0f, 1.0f },
+    { -1.0f, 1.0f, 1.0f },
+    {  1.0f, -1.0f, 1.0f },
+    { -1.0f, 1.0f, 1.0f },
+    { -1.0f, -1.0f, 1.0f },
+
+    { -1.0f, -1.0f, 1.0f },
+    { -1.0f, 1.0f, 1.0f },
+    { -1.0f, 1.0f, -1.0f },
+    { -1.0f, -1.0f, 1.0f },
+    { -1.0f, 1.0f, -1.0f },
+    { -1.0f, -1.0f, -1.0f },
+
+    { 1.0f, -1.0f, -1.0f },
+    { 1.0f, 1.0f, -1.0f },
+    { 1.0f, 1.0f, 1.0f },
+    { 1.0f, -1.0f, -1.0f },
+    { 1.0f, 1.0f, 1.0f },
+    { 1.0f, -1.0f, 1.0f },
+
+    { -1.0f, 1.0f, -1.0f },
+    { -1.0f, 1.0f, 1.0f },
+    { 1.0f, 1.0f, 1.0f },
+    { -1.0f, 1.0f, -1.0f },
+    { 1.0f, 1.0f, 1.0f },
+    { 1.0f, 1.0f, -1.0f },
+
+    { -1.0f, -1.0f, 1.0f },
+    { -1.0f, -1.0f, -1.0f },
+    { 1.0f, -1.0f, -1.0f },
+    { -1.0f, -1.0f, 1.0f },
+    { 1.0f, -1.0f, -1.0f },
+    { 1.0f, -1.0f, 1.0f },
 };
 
 int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow) {
@@ -97,13 +166,13 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow) {
     wcex.lpfnWndProc = WndProc;
     wcex.hInstance = hInstance;
     wcex.hbrBackground = nullptr;
-    wcex.lpszClassName = L"Laboratory work 3";
+    wcex.lpszClassName = L"Laboratory work 4";
 
     RegisterClassExW(&wcex);
 
     HWND hWnd = CreateWindowW(
-        L"Laboratory work 3",
-        L"Laboratory work 3",
+        L"Laboratory work 4",
+        L"Laboratory work 4",
         WS_OVERLAPPEDWINDOW,
         100,
         100,
@@ -127,8 +196,7 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow) {
         if (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
             TranslateMessage(&msg);
             DispatchMessage(&msg);
-        }
-        else {
+        } else {
             Render();
         }
     }
@@ -139,37 +207,33 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow) {
 
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
     switch (message) {
-    case WM_KEYDOWN:
-        if (wParam == VK_LEFT) g_CamYaw += 0.1f;
-        if (wParam == VK_RIGHT) g_CamYaw -= 0.1f;
-        if (wParam == VK_UP) g_CamPitch += 0.1f;
-        if (wParam == VK_DOWN) g_CamPitch -= 0.1f;
+    case WM_LBUTTONDOWN:
+        g_MouseDragging = true;
+        g_LastMousePos.x = LOWORD(lParam);
+        g_LastMousePos.y = HIWORD(lParam);
+        SetCapture(hWnd);
         break;
-    case WM_SIZE:
-        if (g_pd3dDevice && g_pSwapChain) {
-            if (g_pRenderTargetView) {
-                m_pDeviceContext->OMSetRenderTargets(0, nullptr, nullptr);
-                g_pRenderTargetView->Release();
-                g_pRenderTargetView = nullptr;
-            }
-
-            g_pSwapChain->ResizeBuffers(0, LOWORD(lParam), HIWORD(lParam), DXGI_FORMAT_UNKNOWN, 0);
-
-            ID3D11Texture2D* pBackBuffer = nullptr;
-            g_pSwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), (LPVOID *)&pBackBuffer);
-            g_pd3dDevice->CreateRenderTargetView(pBackBuffer, nullptr, &g_pRenderTargetView);
-            pBackBuffer->Release();
-
-            m_pDeviceContext->OMSetRenderTargets(1, &g_pRenderTargetView, nullptr);
-            RECT rc;
-            GetClientRect(hWnd, &rc);
-            D3D11_VIEWPORT vp = {};
-            vp.Width = static_cast<FLOAT>(rc.right - rc.left);
-            vp.Height = static_cast<FLOAT>(rc.bottom - rc.top);
-            vp.MinDepth = 0.0f;
-            vp.MaxDepth = 1.0f;
-            m_pDeviceContext->RSSetViewports(1, &vp);
+    case WM_LBUTTONUP:
+        g_MouseDragging = false;
+        ReleaseCapture();
+        break;
+    case WM_MOUSEMOVE:
+        if (g_MouseDragging) {
+            int x = LOWORD(lParam);
+            int y = HIWORD(lParam);
+            int dx = x - g_LastMousePos.x;
+            int dy = y - g_LastMousePos.y;
+            g_CameraAzimuth += dx * 0.005f;
+            g_CameraElevation += dy * 0.005f;
+            if (g_CameraElevation > XM_PIDIV2 - 0.01f)
+                g_CameraElevation = XM_PIDIV2 - 0.01f;
+            if (g_CameraElevation < -XM_PIDIV2 + 0.01f)
+                g_CameraElevation = -XM_PIDIV2 + 0.01f;
+            g_LastMousePos.x = x;
+            g_LastMousePos.y = y;
         }
+        break;
+    case WM_KEYDOWN:
         break;
     case WM_DESTROY:
         PostQuitMessage(0);
@@ -235,7 +299,26 @@ HRESULT InitDevice(HWND hWnd) {
     if (FAILED(hr))
         return hr;
 
-    m_pDeviceContext->OMSetRenderTargets(1, &g_pRenderTargetView, nullptr);
+    D3D11_TEXTURE2D_DESC descDepth = {};
+    descDepth.Width = width;
+    descDepth.Height = height;
+    descDepth.MipLevels = 1;
+    descDepth.ArraySize = 1;
+    descDepth.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
+    descDepth.SampleDesc.Count = 1;
+    descDepth.BindFlags = D3D11_BIND_DEPTH_STENCIL;
+    ID3D11Texture2D* pDepthStencil = nullptr;
+
+    hr = g_pd3dDevice->CreateTexture2D(&descDepth, nullptr, &pDepthStencil);
+    if (FAILED(hr))
+        return hr;
+
+    hr = g_pd3dDevice->CreateDepthStencilView(pDepthStencil, nullptr, &g_pDepthStencilView);
+    pDepthStencil->Release();
+    if (FAILED(hr))
+        return hr;
+
+    m_pDeviceContext->OMSetRenderTargets(1, &g_pRenderTargetView, g_pDepthStencilView);
 
     D3D11_VIEWPORT vp = {};
     vp.TopLeftX = 0;
@@ -247,25 +330,6 @@ HRESULT InitDevice(HWND hWnd) {
     m_pDeviceContext->RSSetViewports(1, &vp);
 
     hr = CreateCubeResources();
-    if (FAILED(hr))
-        return hr;
-
-    // Create constant buffers
-    D3D11_BUFFER_DESC cbDesc = {};
-    cbDesc.Usage = D3D11_USAGE_DEFAULT;
-    cbDesc.ByteWidth = sizeof(XMMATRIX);
-    cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-    cbDesc.CPUAccessFlags = 0;
-    hr = g_pd3dDevice->CreateBuffer(&cbDesc, nullptr, &g_pModelBuffer);
-    if (FAILED(hr))
-        return hr;
-
-    D3D11_BUFFER_DESC vpDesc = {};
-    vpDesc.Usage = D3D11_USAGE_DYNAMIC;
-    vpDesc.ByteWidth = sizeof(XMMATRIX);
-    vpDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-    vpDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-    hr = g_pd3dDevice->CreateBuffer(&vpDesc, nullptr, &g_pVPBuffer);
     if (FAILED(hr))
         return hr;
 
@@ -326,12 +390,12 @@ HRESULT CreateCubeResources() {
 
     D3D11_INPUT_ELEMENT_DESC layout[] = {
         { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
-        { "COLOR",    0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+        { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, sizeof(float) * 3, D3D11_INPUT_PER_VERTEX_DATA, 0 },
     };
 
     hr = g_pd3dDevice->CreateInputLayout(
         layout,
-        ARRAYSIZE(layout),
+        2,
         vsBlob->GetBufferPointer(),
         vsBlob->GetBufferSize(),
         &g_pVertexLayout
@@ -345,7 +409,6 @@ HRESULT CreateCubeResources() {
     ibd.Usage = D3D11_USAGE_DEFAULT;
     ibd.ByteWidth = sizeof(Vertex) * ARRAYSIZE(g_CubeVertices);
     ibd.BindFlags = D3D11_BIND_VERTEX_BUFFER;
-    ibd.CPUAccessFlags = 0;
 
     D3D11_SUBRESOURCE_DATA initData = {};
     initData.pSysMem = g_CubeVertices;
@@ -354,25 +417,143 @@ HRESULT CreateCubeResources() {
     if (FAILED(hr))
         return hr;
 
+    ibd.Usage = D3D11_USAGE_DEFAULT;
+    ibd.ByteWidth = sizeof(XMMATRIX);
+    ibd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    ibd.CPUAccessFlags = 0;
+    hr = g_pd3dDevice->CreateBuffer(&ibd, nullptr, &g_pModelBuffer);
+    if (FAILED(hr))
+        return hr;
+
+    D3D11_BUFFER_DESC vpBufferDesc = {};
+    vpBufferDesc.Usage = D3D11_USAGE_DYNAMIC;
+    vpBufferDesc.ByteWidth = sizeof(XMMATRIX);
+    vpBufferDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    vpBufferDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+    hr = g_pd3dDevice->CreateBuffer(&vpBufferDesc, nullptr, &g_pVPBuffer);
+    if (FAILED(hr))
+        return hr;
+
+    hr = CreateDDSTextureFromFile(g_pd3dDevice, L"cube.dds", nullptr, &g_pCubeTextureRV);
+    if (FAILED(hr))
+        return hr;
+
+    D3D11_SAMPLER_DESC sampDesc = {};
+    sampDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+    sampDesc.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
+    sampDesc.AddressV = D3D11_TEXTURE_ADDRESS_WRAP;
+    sampDesc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
+    sampDesc.ComparisonFunc = D3D11_COMPARISON_NEVER;
+    sampDesc.MinLOD = 0;
+    sampDesc.MaxLOD = D3D11_FLOAT32_MAX;
+    hr = g_pd3dDevice->CreateSamplerState(&sampDesc, &g_pSamplerLinear);
+    if (FAILED(hr))
+        return hr;
+
+    ID3DBlob* skyboxVsBlob = nullptr;
+    ID3DBlob* skyboxPsBlob = nullptr;
+
+    hr = D3DCompileFromFile(
+        L"skybox_vs.hlsl",
+        nullptr,
+        D3D_COMPILE_STANDARD_FILE_INCLUDE,
+        "main",
+        "vs_4_0",
+        0,
+        0,
+        &skyboxVsBlob,
+        nullptr
+    );
+    if (FAILED(hr))
+        return hr;
+
+    hr = D3DCompileFromFile(
+        L"skybox_ps.hlsl",
+        nullptr,
+        D3D_COMPILE_STANDARD_FILE_INCLUDE,
+        "main",
+        "ps_4_0",
+        0,
+        0,
+        &skyboxPsBlob,
+        nullptr
+    );
+    if (FAILED(hr))
+        return hr;
+
+    hr = g_pd3dDevice->CreateVertexShader(
+        skyboxVsBlob->GetBufferPointer(),
+        skyboxVsBlob->GetBufferSize(),
+        nullptr,
+        &g_pSkyboxVS
+    );
+    if (FAILED(hr))
+        return hr;
+
+    hr = g_pd3dDevice->CreatePixelShader(
+        skyboxPsBlob->GetBufferPointer(),
+        skyboxPsBlob->GetBufferSize(),
+        nullptr,
+        &g_pSkyboxPS
+    );
+    if (FAILED(hr))
+        return hr;
+
+    D3D11_INPUT_ELEMENT_DESC skyboxLayout[] = {
+        { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+    };
+
+    hr = g_pd3dDevice->CreateInputLayout(
+        skyboxLayout,
+        1,
+        skyboxVsBlob->GetBufferPointer(),
+        skyboxVsBlob->GetBufferSize(),
+        &g_pSkyboxInputLayout
+    );
+    if (FAILED(hr))
+        return hr;
+
+    skyboxVsBlob->Release();
+    skyboxPsBlob->Release();
+
+    ibd.Usage = D3D11_USAGE_DEFAULT;
+    ibd.ByteWidth = sizeof(SkyboxVertex) * ARRAYSIZE(g_SkyboxVertices);
+    ibd.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+    initData.pSysMem = g_SkyboxVertices;
+    hr = g_pd3dDevice->CreateBuffer(&ibd, &initData, &g_pSkyboxVertexBuffer);
+    if (FAILED(hr))
+        return hr;
+
+    vpBufferDesc.Usage = D3D11_USAGE_DYNAMIC;
+    vpBufferDesc.ByteWidth = sizeof(XMMATRIX);
+    vpBufferDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    vpBufferDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+
+    hr = g_pd3dDevice->CreateBuffer(&vpBufferDesc, nullptr, &g_pSkyboxVPBuffer);
+    if (FAILED(hr))
+        return hr;
+
+    hr = CreateDDSTextureFromFile(g_pd3dDevice, L"skybox.dds", nullptr, &g_pSkyboxTextureRV);
+    if (FAILED(hr))
+        return hr;
+
     return S_OK;
 }
 
 void Render() {
-    m_pDeviceContext->OMSetRenderTargets(1, &g_pRenderTargetView, nullptr);
+    m_pDeviceContext->OMSetRenderTargets(1, &g_pRenderTargetView, g_pDepthStencilView);
 
     m_pDeviceContext->ClearRenderTargetView(g_pRenderTargetView, g_ClearColor);
+    m_pDeviceContext->ClearDepthStencilView(g_pDepthStencilView, D3D11_CLEAR_DEPTH, 1.0f, 0);
 
     g_CubeAngle += 0.01f;
     if (g_CubeAngle > XM_2PI) g_CubeAngle -= XM_2PI;
     XMMATRIX model = XMMatrixRotationY(g_CubeAngle);
 
-    float radius = 3.0f;
-    float theta = g_CamYaw;
-    float phi = g_CamPitch;
-
-    float x = radius * cosf(g_CamYaw) * cosf(g_CamPitch);
-    float y = radius * sinf(g_CamPitch);
-    float z = radius * sinf(g_CamYaw) * cosf(g_CamPitch);
+    float radius = 5.0f;
+    float x = radius * sinf(g_CameraAzimuth) * cosf(g_CameraElevation);
+    float y = radius * sinf(g_CameraElevation);
+    float z = radius * cosf(g_CameraAzimuth) * cosf(g_CameraElevation);
 
     XMVECTOR eyePos = XMVectorSet(x, y, z, 0.0f);
     XMVECTOR focusPoint = XMVectorZero();
@@ -380,7 +561,7 @@ void Render() {
     XMMATRIX view = XMMatrixLookAtLH(eyePos, focusPoint, upDir);
 
     RECT rc;
-    GetClientRect(FindWindow(L"Laboratory work 3", L"Laboratory work 3"), &rc);
+    GetClientRect(FindWindow(L"Laboratory work 4", L"Laboratory work 4"), &rc);
     float aspect = static_cast<float>(rc.right - rc.left) / (rc.bottom - rc.top);
     XMMATRIX proj = XMMatrixPerspectiveFovLH(XM_PIDIV4, aspect, 0.01f, 100.0f);
 
@@ -391,26 +572,74 @@ void Render() {
 
     m_pDeviceContext->UpdateSubresource(g_pModelBuffer, 0, nullptr, &mT, 0, 0);
 
+    XMMATRIX viewSkybox = view;
+    viewSkybox.r[3] = XMVectorSet(0, 0, 0, 1);
+    XMMATRIX vpSkybox = XMMatrixTranspose(viewSkybox * proj);
+
     D3D11_MAPPED_SUBRESOURCE mappedVP;
-    HRESULT hr = m_pDeviceContext->Map(g_pVPBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedVP);
+    HRESULT hr = m_pDeviceContext->Map(g_pSkyboxVPBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedVP);
+    if (SUCCEEDED(hr)) {
+        memcpy(mappedVP.pData, &vpSkybox, sizeof(XMMATRIX));
+        m_pDeviceContext->Unmap(g_pSkyboxVPBuffer, 0);
+    }
+
+    D3D11_DEPTH_STENCIL_DESC dsDesc = {};
+    dsDesc.DepthEnable = true;
+    dsDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
+    dsDesc.DepthFunc = D3D11_COMPARISON_LESS_EQUAL;
+    ID3D11DepthStencilState *pDSStateSkybox = nullptr;
+    g_pd3dDevice->CreateDepthStencilState(&dsDesc, &pDSStateSkybox);
+    m_pDeviceContext->OMSetDepthStencilState(pDSStateSkybox, 0);
+
+    D3D11_RASTERIZER_DESC rsDesc = {};
+    rsDesc.FillMode = D3D11_FILL_SOLID;
+    rsDesc.CullMode = D3D11_CULL_FRONT;
+    rsDesc.FrontCounterClockwise = false;
+    ID3D11RasterizerState* pSkyboxRS = nullptr;
+    hr = g_pd3dDevice->CreateRasterizerState(&rsDesc, &pSkyboxRS);
+    if (SUCCEEDED(hr)) {
+        m_pDeviceContext->RSSetState(pSkyboxRS);
+    }
+
+    UINT stride = sizeof(SkyboxVertex);
+    UINT offset = 0;
+    m_pDeviceContext->IASetVertexBuffers(0, 1, &g_pSkyboxVertexBuffer, &stride, &offset);
+    m_pDeviceContext->IASetInputLayout(g_pSkyboxInputLayout);
+    m_pDeviceContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    m_pDeviceContext->VSSetShader(g_pSkyboxVS, nullptr, 0);
+    m_pDeviceContext->VSSetConstantBuffers(0, 1, &g_pSkyboxVPBuffer);
+    m_pDeviceContext->PSSetShader(g_pSkyboxPS, nullptr, 0);
+    m_pDeviceContext->PSSetShaderResources(0, 1, &g_pSkyboxTextureRV);
+    m_pDeviceContext->PSSetSamplers(0, 1, &g_pSamplerLinear);
+    m_pDeviceContext->Draw(ARRAYSIZE(g_SkyboxVertices), 0);
+
+    pDSStateSkybox->Release();
+    if (pSkyboxRS) {
+        pSkyboxRS->Release();
+        m_pDeviceContext->RSSetState(nullptr);
+    }
+
+    m_pDeviceContext->OMSetRenderTargets(1, &g_pRenderTargetView, g_pDepthStencilView);
+
+    hr = m_pDeviceContext->Map(g_pVPBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedVP);
     if (SUCCEEDED(hr)) {
         memcpy(mappedVP.pData, &vpT, sizeof(XMMATRIX));
         m_pDeviceContext->Unmap(g_pVPBuffer, 0);
     }
 
-    m_pDeviceContext->VSSetConstantBuffers(0, 1, &g_pModelBuffer);
-    m_pDeviceContext->VSSetConstantBuffers(1, 1, &g_pVPBuffer);
-
-    UINT stride = sizeof(Vertex);
-    UINT offset = 0;
+    stride = sizeof(Vertex);
+    offset = 0;
     m_pDeviceContext->IASetVertexBuffers(0, 1, &g_pVertexBuffer, &stride, &offset);
     m_pDeviceContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     m_pDeviceContext->IASetInputLayout(g_pVertexLayout);
-
     m_pDeviceContext->VSSetShader(g_pVertexShader, nullptr, 0);
     m_pDeviceContext->PSSetShader(g_pPixelShader, nullptr, 0);
-
+    m_pDeviceContext->VSSetConstantBuffers(0, 1, &g_pModelBuffer);
+    m_pDeviceContext->VSSetConstantBuffers(1, 1, &g_pVPBuffer);
+    m_pDeviceContext->PSSetShaderResources(0, 1, &g_pCubeTextureRV);
+    m_pDeviceContext->PSSetSamplers(0, 1, &g_pSamplerLinear);
     m_pDeviceContext->Draw(ARRAYSIZE(g_CubeVertices), 0);
+
     g_pSwapChain->Present(1, 0);
 }
 
@@ -422,8 +651,17 @@ void CleanupDevice() {
     if (g_pPixelShader) g_pPixelShader->Release();
     if (g_pModelBuffer) g_pModelBuffer->Release();
     if (g_pVPBuffer) g_pVPBuffer->Release();
+    if (g_pCubeTextureRV) g_pCubeTextureRV->Release();
+    if (g_pSamplerLinear) g_pSamplerLinear->Release();
     if (g_pRenderTargetView) g_pRenderTargetView->Release();
+    if (g_pDepthStencilView) g_pDepthStencilView->Release();
     if (g_pSwapChain) g_pSwapChain->Release();
     if (m_pDeviceContext) m_pDeviceContext->Release();
     if (g_pd3dDevice) g_pd3dDevice->Release();
+    if (g_pSkyboxVertexBuffer) g_pSkyboxVertexBuffer->Release();
+    if (g_pSkyboxInputLayout) g_pSkyboxInputLayout->Release();
+    if (g_pSkyboxVS) g_pSkyboxVS->Release();
+    if (g_pSkyboxPS) g_pSkyboxPS->Release();
+    if (g_pSkyboxVPBuffer) g_pSkyboxVPBuffer->Release();
+    if (g_pSkyboxTextureRV) g_pSkyboxTextureRV->Release();
 }

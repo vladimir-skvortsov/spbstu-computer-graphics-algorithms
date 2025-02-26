@@ -8,12 +8,12 @@ cbuffer VPBuffer : register(b1) {
 
 struct VSInput {
     float3 position : POSITION;
-    float4 color : COLOR;
+    float2 texcoord : TEXCOORD;
 };
 
 struct VSOutput {
     float4 position : SV_POSITION;
-    float4 color : COLOR;
+    float2 texcoord : TEXCOORD;
 };
 
 VSOutput main(VSInput input) {
@@ -21,6 +21,6 @@ VSOutput main(VSInput input) {
     float4 worldPos = float4(input.position, 1.0);
     output.position = mul(worldPos, model);
     output.position = mul(output.position, vp);
-    output.color = input.color;
+    output.texcoord = input.texcoord;
     return output;
 }
