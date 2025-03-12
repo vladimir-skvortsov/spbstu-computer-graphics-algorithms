@@ -43,6 +43,8 @@ ID3D11Buffer* g_pSkyboxVPBuffer = nullptr;
 ID3D11ShaderResourceView* g_pSkyboxTextureRV = nullptr;
 
 // Transparent cubes
+float g_pinkAnim = 0.0f;
+float g_blueAnim = 0.0f;
 ID3D11PixelShader* g_pTransparentPS = nullptr;
 ID3D11Buffer* g_pTransparentBuffer = nullptr;
 ID3D11BlendState* g_pAlphaBlendState = nullptr;
@@ -715,16 +717,14 @@ void Render() {
     ID3D11ShaderResourceView *nullSRV[1] = {nullptr};
     m_pDeviceContext->PSSetShaderResources(0, 1, nullSRV);
 
-    static float pinkAnim = 0.0f;
-    pinkAnim += 0.02f;
-    float pinkOffsetZ = 2.0f * sinf(pinkAnim);
-    float pinkOffsetY = 2.0f * cosf(pinkAnim);
+    g_pinkAnim += 0.02f;
+    float pinkOffsetZ = 2.0f * sinf(g_pinkAnim);
+    float pinkOffsetY = 2.0f * cosf(g_pinkAnim);
     XMMATRIX modelPink = XMMatrixTranslation(-2.0f, pinkOffsetY, pinkOffsetZ);
     XMVECTOR pinkPos = XMVectorSet(-2.0f, pinkOffsetY, pinkOffsetZ, 1.0f);
 
-    static float blueAnim = 0.0f;
-    blueAnim += 0.02f;
-    float blueOffsetY = 2.0f * sinf(blueAnim);
+    g_blueAnim += 0.02f;
+    float blueOffsetY = 2.0f * sinf(g_blueAnim);
     XMMATRIX modelBlue = XMMatrixTranslation(2.0f, 0.0f, blueOffsetY);
     XMVECTOR bluePos = XMVectorSet(2.0f, 0.0f, blueOffsetY, 1.0f);
 
