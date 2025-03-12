@@ -42,13 +42,20 @@ ID3D11Buffer* g_pSkyboxVertexBuffer = nullptr;
 ID3D11Buffer* g_pSkyboxVPBuffer = nullptr;
 ID3D11ShaderResourceView* g_pSkyboxTextureRV = nullptr;
 
+// Transparent cubes
+ID3D11PixelShader* g_pTransparentPS = nullptr;
+ID3D11Buffer* g_pTransparentBuffer = nullptr;
+ID3D11BlendState* g_pAlphaBlendState = nullptr;
+ID3D11DepthStencilState* g_pDSStateTrans = nullptr;
+
 // Camera control
 float g_CubeAngle = 0.0f;
 float g_CameraAngle = 0.0f;
-bool   g_MouseDragging = false;
-POINT  g_LastMousePos = { 0, 0 };
-float  g_CameraAzimuth = 0.0f;
-float  g_CameraElevation = 0.0f;
+float g_OrbitAngle = 0.0f;
+bool g_MouseDragging = false;
+POINT g_LastMousePos = { 0, 0 };
+float g_CameraAzimuth = 0.0f;
+float g_CameraElevation = 0.0f;
 
 LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 HRESULT InitDevice(HWND hWnd);
@@ -166,13 +173,13 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow) {
     wcex.lpfnWndProc = WndProc;
     wcex.hInstance = hInstance;
     wcex.hbrBackground = nullptr;
-    wcex.lpszClassName = L"Laboratory work 4";
+    wcex.lpszClassName = L"Laboratory work 5";
 
     RegisterClassExW(&wcex);
 
     HWND hWnd = CreateWindowW(
-        L"Laboratory work 4",
-        L"Laboratory work 4",
+        L"Laboratory work 5",
+        L"Laboratory work 5",
         WS_OVERLAPPEDWINDOW,
         100,
         100,
@@ -537,6 +544,60 @@ HRESULT CreateCubeResources() {
     if (FAILED(hr))
         return hr;
 
+    hr = D3DCompileFromFile(
+        L"transparent_ps.hlsl",
+        nullptr,
+        D3D_COMPILE_STANDARD_FILE_INCLUDE,
+        "main",
+        "ps_4_0",
+        0,
+        0,
+        &vsBlob,
+        nullptr
+    );
+    if (FAILED(hr))
+        return hr;
+
+    hr = g_pd3dDevice->CreatePixelShader(
+        vsBlob->GetBufferPointer(),
+        vsBlob->GetBufferSize(),
+        nullptr,
+        &g_pTransparentPS
+    );
+    vsBlob->Release();
+    if (FAILED(hr))
+        return hr;
+
+    D3D11_BUFFER_DESC tbDesc = {};
+    tbDesc.Usage = D3D11_USAGE_DEFAULT;
+    tbDesc.ByteWidth = sizeof(XMFLOAT4);
+    tbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    tbDesc.CPUAccessFlags = 0;
+    hr = g_pd3dDevice->CreateBuffer(&tbDesc, nullptr, &g_pTransparentBuffer);
+    if (FAILED(hr))
+        return hr;
+
+    D3D11_BLEND_DESC blendDesc = {};
+    blendDesc.RenderTarget[0].BlendEnable = TRUE;
+    blendDesc.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+    blendDesc.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+    blendDesc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+    blendDesc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+    blendDesc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ZERO;
+    blendDesc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+    blendDesc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+    hr = g_pd3dDevice->CreateBlendState(&blendDesc, &g_pAlphaBlendState);
+    if (FAILED(hr))
+        return hr;
+
+    D3D11_DEPTH_STENCIL_DESC dsDescTrans = {};
+    dsDescTrans.DepthEnable = true;
+    dsDescTrans.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
+    dsDescTrans.DepthFunc = D3D11_COMPARISON_LESS_EQUAL;
+    hr = g_pd3dDevice->CreateDepthStencilState(&dsDescTrans, &g_pDSStateTrans);
+    if (FAILED(hr))
+        return hr;
+
     return S_OK;
 }
 
@@ -550,7 +611,7 @@ void Render() {
     if (g_CubeAngle > XM_2PI) g_CubeAngle -= XM_2PI;
     XMMATRIX model = XMMatrixRotationY(g_CubeAngle);
 
-    float radius = 5.0f;
+    float radius = 8.0f;
     float x = radius * sinf(g_CameraAzimuth) * cosf(g_CameraElevation);
     float y = radius * sinf(g_CameraElevation);
     float z = radius * cosf(g_CameraAzimuth) * cosf(g_CameraElevation);
@@ -561,7 +622,7 @@ void Render() {
     XMMATRIX view = XMMatrixLookAtLH(eyePos, focusPoint, upDir);
 
     RECT rc;
-    GetClientRect(FindWindow(L"Laboratory work 4", L"Laboratory work 4"), &rc);
+    GetClientRect(FindWindow(L"Laboratory work 5", L"Laboratory work 5"), &rc);
     float aspect = static_cast<float>(rc.right - rc.left) / (rc.bottom - rc.top);
     XMMATRIX proj = XMMatrixPerspectiveFovLH(XM_PIDIV4, aspect, 0.01f, 100.0f);
 
@@ -569,8 +630,6 @@ void Render() {
 
     XMMATRIX mT = XMMatrixTranspose(model);
     XMMATRIX vpT = XMMatrixTranspose(vp);
-
-    m_pDeviceContext->UpdateSubresource(g_pModelBuffer, 0, nullptr, &mT, 0, 0);
 
     XMMATRIX viewSkybox = view;
     viewSkybox.r[3] = XMVectorSet(0, 0, 0, 1);
@@ -619,11 +678,14 @@ void Render() {
         m_pDeviceContext->RSSetState(nullptr);
     }
 
-    m_pDeviceContext->OMSetRenderTargets(1, &g_pRenderTargetView, g_pDepthStencilView);
+    m_pDeviceContext->OMSetDepthStencilState(nullptr, 0);
 
-    hr = m_pDeviceContext->Map(g_pVPBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedVP);
-    if (SUCCEEDED(hr)) {
-        memcpy(mappedVP.pData, &vpT, sizeof(XMMATRIX));
+    XMMATRIX modelT = XMMatrixTranspose(model);
+    m_pDeviceContext->UpdateSubresource(g_pModelBuffer, 0, nullptr, &modelT, 0, 0);
+
+    XMMATRIX vpCube = XMMatrixTranspose(view * proj);
+    if (SUCCEEDED(m_pDeviceContext->Map(g_pVPBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedVP))) {
+        memcpy(mappedVP.pData, &vpCube, sizeof(XMMATRIX));
         m_pDeviceContext->Unmap(g_pVPBuffer, 0);
     }
 
@@ -639,6 +701,66 @@ void Render() {
     m_pDeviceContext->PSSetShaderResources(0, 1, &g_pCubeTextureRV);
     m_pDeviceContext->PSSetSamplers(0, 1, &g_pSamplerLinear);
     m_pDeviceContext->Draw(ARRAYSIZE(g_CubeVertices), 0);
+
+    g_OrbitAngle += 0.005f;
+    XMMATRIX model2 = XMMatrixRotationZ(g_OrbitAngle) * XMMatrixTranslation(4.0f, 0.0f, 0.0f) * XMMatrixRotationZ(-g_OrbitAngle);
+    XMMATRIX model2T = XMMatrixTranspose(model2);
+    m_pDeviceContext->UpdateSubresource(g_pModelBuffer, 0, nullptr, &model2T, 0, 0);
+    m_pDeviceContext->Draw(ARRAYSIZE(g_CubeVertices), 0);
+
+    float blendFactor[4] = {0, 0, 0, 0};
+    m_pDeviceContext->OMSetBlendState(g_pAlphaBlendState, blendFactor, 0xFFFFFFFF);
+    m_pDeviceContext->OMSetDepthStencilState(g_pDSStateTrans, 0);
+
+    ID3D11ShaderResourceView *nullSRV[1] = {nullptr};
+    m_pDeviceContext->PSSetShaderResources(0, 1, nullSRV);
+
+    static float pinkAnim = 0.0f;
+    pinkAnim += 0.02f;
+    float pinkOffsetZ = 2.0f * sinf(pinkAnim);
+    float pinkOffsetY = 2.0f * cosf(pinkAnim);
+    XMMATRIX modelPink = XMMatrixTranslation(-2.0f, pinkOffsetY, pinkOffsetZ);
+    XMVECTOR pinkPos = XMVectorSet(-2.0f, pinkOffsetY, pinkOffsetZ, 1.0f);
+
+    static float blueAnim = 0.0f;
+    blueAnim += 0.02f;
+    float blueOffsetY = 2.0f * sinf(blueAnim);
+    XMMATRIX modelBlue = XMMatrixTranslation(2.0f, 0.0f, blueOffsetY);
+    XMVECTOR bluePos = XMVectorSet(2.0f, 0.0f, blueOffsetY, 1.0f);
+
+    float pinkDist = XMVectorGetX(XMVector3LengthSq(XMVectorSubtract(pinkPos, eyePos)));
+    float blueDist = XMVectorGetX(XMVector3LengthSq(XMVectorSubtract(bluePos, eyePos)));
+
+    m_pDeviceContext->PSSetShader(g_pTransparentPS, nullptr, 0);
+    m_pDeviceContext->PSSetConstantBuffers(0, 1, &g_pTransparentBuffer);
+
+    XMFLOAT4 pinkColor = XMFLOAT4(1.0f, 0.68f, 0.8f, 0.5f);
+    XMFLOAT4 blueColor = XMFLOAT4(0.64f, 0.82f, 1.0f, 0.5f);
+
+    if (pinkDist >= blueDist) {
+        XMMATRIX modelPinkT = XMMatrixTranspose(modelPink);
+        m_pDeviceContext->UpdateSubresource(g_pModelBuffer, 0, nullptr, &modelPinkT, 0, 0);
+        m_pDeviceContext->UpdateSubresource(g_pTransparentBuffer, 0, nullptr, &pinkColor, 0, 0);
+        m_pDeviceContext->Draw(ARRAYSIZE(g_CubeVertices), 0);
+
+        XMMATRIX modelBlueT = XMMatrixTranspose(modelBlue);
+        m_pDeviceContext->UpdateSubresource(g_pModelBuffer, 0, nullptr, &modelBlueT, 0, 0);
+        m_pDeviceContext->UpdateSubresource(g_pTransparentBuffer, 0, nullptr, &blueColor, 0, 0);
+        m_pDeviceContext->Draw(ARRAYSIZE(g_CubeVertices), 0);
+    } else {
+        XMMATRIX modelBlueT = XMMatrixTranspose(modelBlue);
+        m_pDeviceContext->UpdateSubresource(g_pModelBuffer, 0, nullptr, &modelBlueT, 0, 0);
+        m_pDeviceContext->UpdateSubresource(g_pTransparentBuffer, 0, nullptr, &blueColor, 0, 0);
+        m_pDeviceContext->Draw(ARRAYSIZE(g_CubeVertices), 0);
+
+        XMMATRIX modelPinkT = XMMatrixTranspose(modelPink);
+        m_pDeviceContext->UpdateSubresource(g_pModelBuffer, 0, nullptr, &modelPinkT, 0, 0);
+        m_pDeviceContext->UpdateSubresource(g_pTransparentBuffer, 0, nullptr, &pinkColor, 0, 0);
+        m_pDeviceContext->Draw(ARRAYSIZE(g_CubeVertices), 0);
+    }
+
+    m_pDeviceContext->OMSetBlendState(nullptr, blendFactor, 0xFFFFFFFF);
+    m_pDeviceContext->OMSetDepthStencilState(nullptr, 0);
 
     g_pSwapChain->Present(1, 0);
 }
@@ -664,4 +786,8 @@ void CleanupDevice() {
     if (g_pSkyboxPS) g_pSkyboxPS->Release();
     if (g_pSkyboxVPBuffer) g_pSkyboxVPBuffer->Release();
     if (g_pSkyboxTextureRV) g_pSkyboxTextureRV->Release();
+    if (g_pTransparentPS) g_pTransparentPS->Release();
+    if (g_pTransparentBuffer) g_pTransparentBuffer->Release();
+    if (g_pAlphaBlendState) g_pAlphaBlendState->Release();
+    if (g_pDSStateTrans) g_pDSStateTrans->Release();
 }
