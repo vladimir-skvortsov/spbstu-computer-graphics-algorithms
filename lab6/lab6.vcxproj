@@ -142,6 +142,7 @@
   </ItemGroup>
   <ItemGroup>
     <CopyFileToFolders Include="cube.dds" />
+    <CopyFileToFolders Include="cube_normal.dds" />
     <Image Include="lab6.ico" />
     <CopyFileToFolders Include="skybox.dds" />
     <Image Include="small.ico" />
@@ -170,6 +171,16 @@
   </ItemGroup>
   <ItemGroup>
     <CopyFileToFolders Include="transparent_ps.hlsl">
+      <FileType>Document</FileType>
+    </CopyFileToFolders>
+  </ItemGroup>
+  <ItemGroup>
+    <CopyFileToFolders Include="transparent_vs.hlsl">
+      <FileType>Document</FileType>
+    </CopyFileToFolders>
+  </ItemGroup>
+  <ItemGroup>
+    <CopyFileToFolders Include="light_ps.hlsl">
       <FileType>Document</FileType>
     </CopyFileToFolders>
   </ItemGroup>
