@@ -847,8 +847,8 @@ void Render() {
     m_pDeviceContext->VSSetShader(g_pTransparentVS, nullptr, 0);
     m_pDeviceContext->PSSetConstantBuffers(0, 1, &g_pLightBuffer);
 
-    XMFLOAT4 pinkColor = XMFLOAT4(1.0f, 0.68f, 0.8f, 0.5f);
-    XMFLOAT4 blueColor = XMFLOAT4(0.64f, 0.82f, 1.0f, 0.5f);
+    XMFLOAT4 pinkColor = XMFLOAT4(1.0f, 0.68f, 0.8f, 0.8f);
+    XMFLOAT4 blueColor = XMFLOAT4(0.64f, 0.82f, 1.0f, 0.8f);
 
     if (pinkDist >= blueDist) {
         XMMATRIX modelPinkT = XMMatrixTranspose(modelPink);
