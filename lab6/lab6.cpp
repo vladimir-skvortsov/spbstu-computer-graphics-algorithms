@@ -54,8 +54,8 @@ ID3D11Buffer* g_pTransparentBuffer = nullptr;
 ID3D11Buffer* g_pLightBuffer = nullptr;
 ID3D11PixelShader* g_pLightPS = nullptr;
 ID3D11Buffer* g_pLightColorBuffer = nullptr;
+ID3D11Buffer* g_pPinkColorBuffer = nullptr;
 ID3D11Buffer* g_pBlueColorBuffer = nullptr;
-ID3D11Buffer* g_pGreenColorBuffer = nullptr;
 
 ID3D11BlendState* g_pAlphaBlendState = nullptr;
 ID3D11DepthStencilState* g_pDSStateTrans = nullptr;
@@ -656,11 +656,11 @@ HRESULT CreateCubeResources() {
     colorBufferDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
     colorBufferDesc.CPUAccessFlags = 0;
 
-    hr = g_pd3dDevice->CreateBuffer(&colorBufferDesc, nullptr, &g_pBlueColorBuffer);
+    hr = g_pd3dDevice->CreateBuffer(&colorBufferDesc, nullptr, &g_pPinkColorBuffer);
     if (FAILED(hr))
         return hr;
 
-    hr = g_pd3dDevice->CreateBuffer(&colorBufferDesc, nullptr, &g_pGreenColorBuffer);
+    hr = g_pd3dDevice->CreateBuffer(&colorBufferDesc, nullptr, &g_pBlueColorBuffer);
     if (FAILED(hr))
         return hr;
 
@@ -853,26 +853,26 @@ void Render() {
     if (pinkDist >= blueDist) {
         XMMATRIX modelPinkT = XMMatrixTranspose(modelPink);
         m_pDeviceContext->UpdateSubresource(g_pModelBuffer, 0, nullptr, &modelPinkT, 0, 0);
-        m_pDeviceContext->UpdateSubresource(g_pBlueColorBuffer, 0, nullptr, &pinkColor, 0, 0);
-        m_pDeviceContext->PSSetConstantBuffers(1, 1, &g_pBlueColorBuffer);
+        m_pDeviceContext->UpdateSubresource(g_pPinkColorBuffer, 0, nullptr, &pinkColor, 0, 0);
+        m_pDeviceContext->PSSetConstantBuffers(1, 1, &g_pPinkColorBuffer);
         m_pDeviceContext->Draw(ARRAYSIZE(g_CubeVertices), 0);
 
         XMMATRIX modelBlueT = XMMatrixTranspose(modelBlue);
         m_pDeviceContext->UpdateSubresource(g_pModelBuffer, 0, nullptr, &modelBlueT, 0, 0);
-        m_pDeviceContext->UpdateSubresource(g_pGreenColorBuffer, 0, nullptr, &blueColor, 0, 0);
-        m_pDeviceContext->PSSetConstantBuffers(1, 1, &g_pGreenColorBuffer);
+        m_pDeviceContext->UpdateSubresource(g_pBlueColorBuffer, 0, nullptr, &blueColor, 0, 0);
+        m_pDeviceContext->PSSetConstantBuffers(1, 1, &g_pBlueColorBuffer);
         m_pDeviceContext->Draw(ARRAYSIZE(g_CubeVertices), 0);
     } else {
         XMMATRIX modelBlueT = XMMatrixTranspose(modelBlue);
         m_pDeviceContext->UpdateSubresource(g_pModelBuffer, 0, nullptr, &modelBlueT, 0, 0);
-        m_pDeviceContext->UpdateSubresource(g_pGreenColorBuffer, 0, nullptr, &blueColor, 0, 0);
-        m_pDeviceContext->PSSetConstantBuffers(1, 1, &g_pGreenColorBuffer);
+        m_pDeviceContext->UpdateSubresource(g_pBlueColorBuffer, 0, nullptr, &blueColor, 0, 0);
+        m_pDeviceContext->PSSetConstantBuffers(1, 1, &g_pBlueColorBuffer);
         m_pDeviceContext->Draw(ARRAYSIZE(g_CubeVertices), 0);
 
         XMMATRIX modelPinkT = XMMatrixTranspose(modelPink);
         m_pDeviceContext->UpdateSubresource(g_pModelBuffer, 0, nullptr, &modelPinkT, 0, 0);
-        m_pDeviceContext->UpdateSubresource(g_pBlueColorBuffer, 0, nullptr, &pinkColor, 0, 0);
-        m_pDeviceContext->PSSetConstantBuffers(1, 1, &g_pBlueColorBuffer);
+        m_pDeviceContext->UpdateSubresource(g_pPinkColorBuffer, 0, nullptr, &pinkColor, 0, 0);
+        m_pDeviceContext->PSSetConstantBuffers(1, 1, &g_pPinkColorBuffer);
         m_pDeviceContext->Draw(ARRAYSIZE(g_CubeVertices), 0);
     }
 
@@ -938,5 +938,7 @@ void CleanupDevice() {
     if (g_pLightBuffer) g_pLightBuffer->Release();
     if (g_pLightPS) g_pLightPS->Release();
     if (g_pLightColorBuffer) g_pLightColorBuffer->Release();
+    if (g_pPinkColorBuffer) g_pPinkColorBuffer->Release();
+    if (g_pBlueColorBuffer) g_pBlueColorBuffer->Release();
     if (g_pTransparentVS) g_pTransparentVS->Release();
 }
