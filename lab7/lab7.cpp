@@ -6,11 +6,17 @@
 #include <chrono>
 #include "DDSTextureLoader.h"
 
+#include "imgui.h"
+#include "imgui_impl_win32.h"
+#include "imgui_impl_dx11.h"
+
 #pragma comment(lib, "d3dcompiler.lib")
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
 
 using namespace DirectX;
+
+extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 // Global variables
 ID3D11Device* g_pd3dDevice = nullptr;
@@ -60,20 +66,79 @@ ID3D11Buffer* g_pBlueColorBuffer = nullptr;
 ID3D11BlendState* g_pAlphaBlendState = nullptr;
 ID3D11DepthStencilState* g_pDSStateTrans = nullptr;
 
+// ImGui control
+bool g_EnablePostProcessFilter = false;
+ID3D11Texture2D* g_pPostProcessTex = nullptr;
+ID3D11RenderTargetView* g_pPostProcessRTV = nullptr;
+ID3D11ShaderResourceView* g_pPostProcessSRV = nullptr;
+ID3D11VertexShader* g_pPostProcessVS = nullptr;
+ID3D11PixelShader* g_pPostProcessPS = nullptr;
+ID3D11Buffer* g_pFullScreenVB = nullptr;
+ID3D11InputLayout* g_pFullScreenLayout = nullptr;
+bool g_EnableFrustumCulling = false;
+
 // Camera control
 float g_CubeAngle = 0.0f;
 float g_CameraAngle = 0.0f;
-float g_OrbitAngle = 0.0f;
 bool g_MouseDragging = false;
 POINT g_LastMousePos = { 0, 0 };
 float g_CameraAzimuth = 0.0f;
 float g_CameraElevation = 0.0f;
+int g_totalInstances = 0;
+int g_finalInstanceCount = 0;
 
 LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 HRESULT InitDevice(HWND hWnd);
 void CleanupDevice();
+void RenderImGui();
+void RenderScene();
 void Render();
 HRESULT CreateCubeResources();
+
+struct Plane {
+    float a, b, c, d;
+};
+
+void ExtractFrustumPlanes(const XMMATRIX& M, Plane planes[6]) {
+    planes[0].a = M.r[0].m128_f32[3] + M.r[0].m128_f32[0];
+    planes[0].b = M.r[1].m128_f32[3] + M.r[1].m128_f32[0];
+    planes[0].c = M.r[2].m128_f32[3] + M.r[2].m128_f32[0];
+    planes[0].d = M.r[3].m128_f32[3] + M.r[3].m128_f32[0];
+
+    planes[1].a = M.r[0].m128_f32[3] - M.r[0].m128_f32[0];
+    planes[1].b = M.r[1].m128_f32[3] - M.r[1].m128_f32[0];
+    planes[1].c = M.r[2].m128_f32[3] - M.r[2].m128_f32[0];
+    planes[1].d = M.r[3].m128_f32[3] - M.r[3].m128_f32[0];
+
+    planes[2].a = M.r[0].m128_f32[3] - M.r[0].m128_f32[1];
+    planes[2].b = M.r[1].m128_f32[3] - M.r[1].m128_f32[1];
+    planes[2].c = M.r[2].m128_f32[3] - M.r[2].m128_f32[1];
+    planes[2].d = M.r[3].m128_f32[3] - M.r[3].m128_f32[1];
+
+    planes[3].a = M.r[0].m128_f32[3] + M.r[0].m128_f32[1];
+    planes[3].b = M.r[1].m128_f32[3] + M.r[1].m128_f32[1];
+    planes[3].c = M.r[2].m128_f32[3] + M.r[2].m128_f32[1];
+    planes[3].d = M.r[3].m128_f32[3] + M.r[3].m128_f32[1];
+
+    planes[4].a = M.r[0].m128_f32[2];
+    planes[4].b = M.r[1].m128_f32[2];
+    planes[4].c = M.r[2].m128_f32[2];
+    planes[4].d = M.r[3].m128_f32[2];
+
+    planes[5].a = M.r[0].m128_f32[3] - M.r[0].m128_f32[2];
+    planes[5].b = M.r[1].m128_f32[3] - M.r[1].m128_f32[2];
+    planes[5].c = M.r[2].m128_f32[3] - M.r[2].m128_f32[2];
+    planes[5].d = M.r[3].m128_f32[3] - M.r[3].m128_f32[2];
+}
+
+bool IsSphereInFrustum(const Plane planes[6], const XMVECTOR& center, float radius) {
+    for (int i = 0; i < 6; i++) {
+        float distance = XMVectorGetX(XMVector3Dot(center, XMVectorSet(planes[i].a, planes[i].b, planes[i].c, 0.0f))) + planes[i].d;
+        if (distance < -radius)
+            return false;
+    }
+    return true;
+}
 
 struct Vertex {
     XMFLOAT3 position;
@@ -99,53 +164,64 @@ struct LightBufferType {
 };
 
 Vertex g_CubeVertices[] = {
-    {XMFLOAT3(-0.5f, -0.5f, 0.5f), XMFLOAT3(0,0,1), 0.0f, 1.0f},
-    {XMFLOAT3(0.5f, -0.5f, 0.5f), XMFLOAT3(0,0,1), 1.0f, 1.0f},
-    {XMFLOAT3(0.5f, 0.5f, 0.5f), XMFLOAT3(0,0,1), 1.0f, 0.0f},
+    {XMFLOAT3(-0.5f, -0.5f, 0.5f), XMFLOAT3(0, 0, 1), 0.0f, 1.0f},
+    {XMFLOAT3(0.5f, -0.5f, 0.5f), XMFLOAT3(0, 0, 1), 1.0f, 1.0f},
+    {XMFLOAT3(0.5f, 0.5f, 0.5f), XMFLOAT3(0, 0, 1), 1.0f, 0.0f},
 
-    {XMFLOAT3(-0.5f, -0.5f, 0.5f), XMFLOAT3(0,0,1), 0.0f, 1.0f},
-    {XMFLOAT3(0.5f, 0.5f, 0.5f), XMFLOAT3(0,0,1), 1.0f, 0.0f},
-    {XMFLOAT3(-0.5f, 0.5f, 0.5f), XMFLOAT3(0,0,1), 0.0f, 0.0f},
+    {XMFLOAT3(-0.5f, -0.5f, 0.5f), XMFLOAT3(0, 0, 1), 0.0f, 1.0f},
+    {XMFLOAT3(0.5f, 0.5f, 0.5f), XMFLOAT3(0, 0, 1), 1.0f, 0.0f},
+    {XMFLOAT3(-0.5f, 0.5f, 0.5f), XMFLOAT3(0, 0, 1), 0.0f, 0.0f},
 
-    {XMFLOAT3(0.5f, -0.5f, -0.5f), XMFLOAT3(0,0,-1), 0.0f, 1.0f},
-    {XMFLOAT3(-0.5f, -0.5f, -0.5f), XMFLOAT3(0,0,-1), 1.0f, 1.0f},
-    {XMFLOAT3(-0.5f, 0.5f, -0.5f), XMFLOAT3(0,0,-1), 1.0f, 0.0f},
+    {XMFLOAT3(0.5f, -0.5f, -0.5f), XMFLOAT3(0, 0, -1), 0.0f, 1.0f},
+    {XMFLOAT3(-0.5f, -0.5f, -0.5f), XMFLOAT3(0, 0, -1), 1.0f, 1.0f},
+    {XMFLOAT3(-0.5f, 0.5f, -0.5f), XMFLOAT3(0, 0, -1), 1.0f, 0.0f},
 
-    {XMFLOAT3(0.5f, -0.5f, -0.5f), XMFLOAT3(0,0,-1), 0.0f, 1.0f},
-    {XMFLOAT3(-0.5f, 0.5f, -0.5f), XMFLOAT3(0,0,-1), 1.0f, 0.0f},
-    {XMFLOAT3(0.5f, 0.5f, -0.5f), XMFLOAT3(0,0,-1), 0.0f, 0.0f},
+    {XMFLOAT3(0.5f, -0.5f, -0.5f), XMFLOAT3(0, 0, -1), 0.0f, 1.0f},
+    {XMFLOAT3(-0.5f, 0.5f, -0.5f), XMFLOAT3(0, 0, -1), 1.0f, 0.0f},
+    {XMFLOAT3(0.5f, 0.5f, -0.5f), XMFLOAT3(0, 0, -1), 0.0f, 0.0f},
 
-    {XMFLOAT3(-0.5f, -0.5f, -0.5f), XMFLOAT3(-1,0,0), 0.0f, 1.0f},
-    {XMFLOAT3(-0.5f, -0.5f, 0.5f), XMFLOAT3(-1,0,0), 1.0f, 1.0f},
-    {XMFLOAT3(-0.5f, 0.5f, 0.5f), XMFLOAT3(-1,0,0), 1.0f, 0.0f},
+    {XMFLOAT3(-0.5f, -0.5f, -0.5f), XMFLOAT3(-1, 0, 0), 0.0f, 1.0f},
+    {XMFLOAT3(-0.5f, -0.5f, 0.5f), XMFLOAT3(-1, 0, 0), 1.0f, 1.0f},
+    {XMFLOAT3(-0.5f, 0.5f, 0.5f), XMFLOAT3(-1, 0, 0), 1.0f, 0.0f},
 
-    {XMFLOAT3(-0.5f, -0.5f, -0.5f), XMFLOAT3(-1,0,0), 0.0f, 1.0f},
-    {XMFLOAT3(-0.5f, 0.5f, 0.5f), XMFLOAT3(-1,0,0), 1.0f, 0.0f},
-    {XMFLOAT3(-0.5f, 0.5f, -0.5f), XMFLOAT3(-1,0,0), 0.0f, 0.0f},
+    {XMFLOAT3(-0.5f, -0.5f, -0.5f), XMFLOAT3(-1, 0, 0), 0.0f, 1.0f},
+    {XMFLOAT3(-0.5f, 0.5f, 0.5f), XMFLOAT3(-1, 0, 0), 1.0f, 0.0f},
+    {XMFLOAT3(-0.5f, 0.5f, -0.5f), XMFLOAT3(-1, 0, 0), 0.0f, 0.0f},
 
-    {XMFLOAT3(0.5f, -0.5f, 0.5f), XMFLOAT3(1,0,0), 0.0f, 1.0f},
-    {XMFLOAT3(0.5f, -0.5f, -0.5f), XMFLOAT3(1,0,0), 1.0f, 1.0f},
-    {XMFLOAT3(0.5f, 0.5f, -0.5f), XMFLOAT3(1,0,0), 1.0f, 0.0f},
+    {XMFLOAT3(0.5f, -0.5f, 0.5f), XMFLOAT3(1, 0, 0), 0.0f, 1.0f},
+    {XMFLOAT3(0.5f, -0.5f, -0.5f), XMFLOAT3(1, 0, 0), 1.0f, 1.0f},
+    {XMFLOAT3(0.5f, 0.5f, -0.5f), XMFLOAT3(1, 0, 0), 1.0f, 0.0f},
 
-    {XMFLOAT3(0.5f, -0.5f, 0.5f), XMFLOAT3(1,0,0), 0.0f, 1.0f},
-    {XMFLOAT3(0.5f, 0.5f, -0.5f), XMFLOAT3(1,0,0), 1.0f, 0.0f},
-    {XMFLOAT3(0.5f, 0.5f, 0.5f), XMFLOAT3(1,0,0), 0.0f, 0.0f},
+    {XMFLOAT3(0.5f, -0.5f, 0.5f), XMFLOAT3(1, 0, 0), 0.0f, 1.0f},
+    {XMFLOAT3(0.5f, 0.5f, -0.5f), XMFLOAT3(1, 0, 0), 1.0f, 0.0f},
+    {XMFLOAT3(0.5f, 0.5f, 0.5f), XMFLOAT3(1, 0, 0), 0.0f, 0.0f},
 
-    {XMFLOAT3(-0.5f, 0.5f, 0.5f), XMFLOAT3(0,1,0), 0.0f, 1.0f},
-    {XMFLOAT3(0.5f, 0.5f, 0.5f), XMFLOAT3(0,1,0), 1.0f, 1.0f},
-    {XMFLOAT3(0.5f, 0.5f, -0.5f), XMFLOAT3(0,1,0), 1.0f, 0.0f},
+    {XMFLOAT3(-0.5f, 0.5f, 0.5f), XMFLOAT3(0, 1, 0), 0.0f, 1.0f},
+    {XMFLOAT3(0.5f, 0.5f, 0.5f), XMFLOAT3(0, 1, 0), 1.0f, 1.0f},
+    {XMFLOAT3(0.5f, 0.5f, -0.5f), XMFLOAT3(0, 1, 0), 1.0f, 0.0f},
 
-    {XMFLOAT3(-0.5f, 0.5f, 0.5f), XMFLOAT3(0,1,0), 0.0f, 1.0f},
-    {XMFLOAT3(0.5f, 0.5f, -0.5f), XMFLOAT3(0,1,0), 1.0f, 0.0f},
-    {XMFLOAT3(-0.5f, 0.5f, -0.5f), XMFLOAT3(0,1,0), 0.0f, 0.0f},
+    {XMFLOAT3(-0.5f, 0.5f, 0.5f), XMFLOAT3(0, 1, 0), 0.0f, 1.0f},
+    {XMFLOAT3(0.5f, 0.5f, -0.5f), XMFLOAT3(0, 1, 0), 1.0f, 0.0f},
+    {XMFLOAT3(-0.5f, 0.5f, -0.5f), XMFLOAT3(0, 1, 0), 0.0f, 0.0f},
 
-    {XMFLOAT3(-0.5f, -0.5f, -0.5f), XMFLOAT3(0,-1, 0), 0.0f, 1.0f},
-    {XMFLOAT3(0.5f, -0.5f, -0.5f), XMFLOAT3(0,-1, 0), 1.0f, 1.0f},
-    {XMFLOAT3(0.5f, -0.5f, 0.5f), XMFLOAT3(0,-1, 0), 1.0f, 0.0f},
+    {XMFLOAT3(-0.5f, -0.5f, -0.5f), XMFLOAT3(0, -1, 0), 0.0f, 1.0f},
+    {XMFLOAT3(0.5f, -0.5f, -0.5f), XMFLOAT3(0, -1, 0), 1.0f, 1.0f},
+    {XMFLOAT3(0.5f, -0.5f, 0.5f), XMFLOAT3(0, -1, 0), 1.0f, 0.0f},
 
-    {XMFLOAT3(-0.5f, -0.5f, -0.5f), XMFLOAT3(0,-1, 0), 0.0f, 1.0f},
-    {XMFLOAT3(0.5f, -0.5f, 0.5f), XMFLOAT3(0,-1, 0), 1.0f, 0.0f},
-    {XMFLOAT3(-0.5f, -0.5f, 0.5f), XMFLOAT3(0,-1, 0),  0.0f, 0.0f},
+    {XMFLOAT3(-0.5f, -0.5f, -0.5f), XMFLOAT3(0, -1, 0), 0.0f, 1.0f},
+    {XMFLOAT3(0.5f, -0.5f, 0.5f), XMFLOAT3(0, -1, 0), 1.0f, 0.0f},
+    {XMFLOAT3(-0.5f, -0.5f, 0.5f), XMFLOAT3(0, -1, 0), 0.0f, 0.0f},
+};
+
+struct FullScreenVertex {
+    float x, y, z, w;
+    float u, v;
+};
+
+FullScreenVertex g_FullScreenTriangle[3] = {
+    { -1.0f, -1.0f, 0, 1,   0.0f, 1.0f },
+    { -1.0f,  3.0f, 0, 1,   0.0f,-1.0f },
+    {  3.0f, -1.0f, 0, 1,   2.0f, 1.0f }
 };
 
 SkyboxVertex g_SkyboxVertices[] = {
@@ -199,13 +275,13 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow) {
     wcex.lpfnWndProc = WndProc;
     wcex.hInstance = hInstance;
     wcex.hbrBackground = nullptr;
-    wcex.lpszClassName = L"Laboratory work 6";
+    wcex.lpszClassName = L"Laboratory work 7";
 
     RegisterClassExW(&wcex);
 
     HWND hWnd = CreateWindowW(
-        L"Laboratory work 6",
-        L"Laboratory work 6",
+        L"Laboratory work 7",
+        L"Laboratory work 7",
         WS_OVERLAPPEDWINDOW,
         100,
         100,
@@ -239,6 +315,9 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow) {
 }
 
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    if (ImGui_ImplWin32_WndProcHandler(hWnd, message, wParam, lParam))
+        return true;
+
     switch (message) {
     case WM_LBUTTONDOWN:
         g_MouseDragging = true;
@@ -362,6 +441,32 @@ HRESULT InitDevice(HWND hWnd) {
     vp.MaxDepth = 1.0f;
     m_pDeviceContext->RSSetViewports(1, &vp);
 
+    width = rc.right - rc.left;
+    height = rc.bottom - rc.top;
+
+    D3D11_TEXTURE2D_DESC ppDesc = {};
+    ppDesc.Width = width;
+    ppDesc.Height = height;
+    ppDesc.MipLevels = 1;
+    ppDesc.ArraySize = 1;
+    ppDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    ppDesc.SampleDesc.Count = 1;
+    ppDesc.Usage = D3D11_USAGE_DEFAULT;
+    ppDesc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+
+    hr = g_pd3dDevice->CreateTexture2D(&ppDesc, nullptr, &g_pPostProcessTex);
+    if (FAILED(hr))
+        return hr;
+
+    hr = g_pd3dDevice->CreateRenderTargetView(g_pPostProcessTex, nullptr, &g_pPostProcessRTV);
+    if (FAILED(hr))
+        return hr;
+
+    hr = g_pd3dDevice->CreateShaderResourceView(g_pPostProcessTex, nullptr, &g_pPostProcessSRV);
+    if (FAILED(hr))
+        return hr;
+
+
     hr = CreateCubeResources();
     if (FAILED(hr))
         return hr;
@@ -423,7 +528,7 @@ HRESULT CreateCubeResources() {
 
     D3D11_INPUT_ELEMENT_DESC layout[] = {
         { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
-        { "NORMAL",   0, DXGI_FORMAT_R32G32B32_FLOAT, 0, sizeof(float) * 3, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+        { "NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, sizeof(float) * 3, D3D11_INPUT_PER_VERTEX_DATA, 0 },
         { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, sizeof(float) * 6, D3D11_INPUT_PER_VERTEX_DATA, 0 },
     };
 
@@ -434,6 +539,8 @@ HRESULT CreateCubeResources() {
         vsBlob->GetBufferSize(),
         &g_pVertexLayout
     );
+    if (FAILED(hr))
+        return hr;
 
     vsBlob->Release();
     psBlob->Release();
@@ -452,7 +559,8 @@ HRESULT CreateCubeResources() {
         return hr;
 
     ibd.Usage = D3D11_USAGE_DEFAULT;
-    ibd.ByteWidth = sizeof(XMMATRIX);
+    const int numInstances = 21;
+    ibd.ByteWidth = sizeof(XMMATRIX) * numInstances;
     ibd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
     ibd.CPUAccessFlags = 0;
     hr = g_pd3dDevice->CreateBuffer(&ibd, nullptr, &g_pModelBuffer);
@@ -488,9 +596,6 @@ HRESULT CreateCubeResources() {
     if (FAILED(hr))
         return hr;
 
-    ID3DBlob* skyboxVsBlob = nullptr;
-    ID3DBlob* skyboxPsBlob = nullptr;
-
     hr = D3DCompileFromFile(
         L"skybox_vs.hlsl",
         nullptr,
@@ -499,7 +604,7 @@ HRESULT CreateCubeResources() {
         "vs_4_0",
         0,
         0,
-        &skyboxVsBlob,
+        &vsBlob,
         nullptr
     );
     if (FAILED(hr))
@@ -513,15 +618,15 @@ HRESULT CreateCubeResources() {
         "ps_4_0",
         0,
         0,
-        &skyboxPsBlob,
+        &psBlob,
         nullptr
     );
     if (FAILED(hr))
         return hr;
 
     hr = g_pd3dDevice->CreateVertexShader(
-        skyboxVsBlob->GetBufferPointer(),
-        skyboxVsBlob->GetBufferSize(),
+        vsBlob->GetBufferPointer(),
+        vsBlob->GetBufferSize(),
         nullptr,
         &g_pSkyboxVS
     );
@@ -529,8 +634,8 @@ HRESULT CreateCubeResources() {
         return hr;
 
     hr = g_pd3dDevice->CreatePixelShader(
-        skyboxPsBlob->GetBufferPointer(),
-        skyboxPsBlob->GetBufferSize(),
+        psBlob->GetBufferPointer(),
+        psBlob->GetBufferSize(),
         nullptr,
         &g_pSkyboxPS
     );
@@ -544,15 +649,15 @@ HRESULT CreateCubeResources() {
     hr = g_pd3dDevice->CreateInputLayout(
         skyboxLayout,
         1,
-        skyboxVsBlob->GetBufferPointer(),
-        skyboxVsBlob->GetBufferSize(),
+        vsBlob->GetBufferPointer(),
+        vsBlob->GetBufferSize(),
         &g_pSkyboxInputLayout
     );
     if (FAILED(hr))
         return hr;
 
-    skyboxVsBlob->Release();
-    skyboxPsBlob->Release();
+    vsBlob->Release();
+    psBlob->Release();
 
     ibd.Usage = D3D11_USAGE_DEFAULT;
     ibd.ByteWidth = sizeof(SkyboxVertex) * ARRAYSIZE(g_SkyboxVertices);
@@ -595,9 +700,10 @@ HRESULT CreateCubeResources() {
         nullptr,
         &g_pTransparentPS
     );
-    psBlob->Release();
     if (FAILED(hr))
         return hr;
+
+    psBlob->Release();
 
     D3D11_BUFFER_DESC tbDesc = {};
     tbDesc.Usage = D3D11_USAGE_DEFAULT;
@@ -637,9 +743,10 @@ HRESULT CreateCubeResources() {
         nullptr,
         &g_pLightPS
     );
-    psBlob->Release();
     if (FAILED(hr))
         return hr;
+
+    psBlob->Release();
 
     D3D11_BUFFER_DESC lcbDesc = {};
     lcbDesc.Usage = D3D11_USAGE_DEFAULT;
@@ -710,15 +817,158 @@ HRESULT CreateCubeResources() {
 
     psBlob->Release();
 
+    hr = D3DCompileFromFile(
+        L"post_process_vs.hlsl",
+        nullptr,
+        D3D_COMPILE_STANDARD_FILE_INCLUDE,
+        "main",
+        "vs_5_0",
+        0, 0,
+        &vsBlob,
+        nullptr
+    );
+    if (FAILED(hr))
+        return hr;
+
+    hr = g_pd3dDevice->CreateVertexShader(
+        vsBlob->GetBufferPointer(),
+        vsBlob->GetBufferSize(),
+        nullptr,
+        &g_pPostProcessVS);
+    if (FAILED(hr))
+        return hr;
+
+    D3D11_INPUT_ELEMENT_DESC layoutDesc_[] = {
+        { "POSITION", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+        { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, sizeof(float) * 4, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+    };
+
+    hr = g_pd3dDevice->CreateInputLayout(
+        layoutDesc_,
+        _countof(layoutDesc_),
+        vsBlob->GetBufferPointer(),
+        vsBlob->GetBufferSize(),
+        &g_pFullScreenLayout
+    );
+    if (FAILED(hr))
+        return hr;
+
+    vsBlob->Release();
+    vsBlob = nullptr;
+
+    hr = D3DCompileFromFile(
+        L"post_process_ps.hlsl",
+        nullptr,
+        D3D_COMPILE_STANDARD_FILE_INCLUDE,
+        "main",
+        "ps_5_0",
+        0, 0,
+        &psBlob,
+        nullptr
+    );
+    if (FAILED(hr))
+        return hr;
+
+    hr = g_pd3dDevice->CreatePixelShader(
+        psBlob->GetBufferPointer(),
+        psBlob->GetBufferSize(),
+        nullptr,
+        &g_pPostProcessPS
+    );
+
+    psBlob->Release();
+    psBlob = nullptr;
+
+    if (FAILED(hr))
+        return hr;
+
+    {
+        D3D11_BUFFER_DESC ibd = {};
+        ibd.Usage = D3D11_USAGE_DEFAULT;
+        ibd.ByteWidth = sizeof(FullScreenVertex) * 3;
+        ibd.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+        ibd.CPUAccessFlags = 0;
+
+        D3D11_SUBRESOURCE_DATA initData = {};
+        initData.pSysMem = g_FullScreenTriangle;
+
+        hr = g_pd3dDevice->CreateBuffer(&ibd, &initData, &g_pFullScreenVB);
+        if (FAILED(hr))
+        {
+            return hr;
+        }
+    }
+
+
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+
+    ImGui::StyleColorsDark();
+
+    ImGui_ImplWin32_Init(FindWindow(L"Laboratory work 7", L"Laboratory work 7"));
+
+    ImGui_ImplDX11_Init(g_pd3dDevice, m_pDeviceContext);
+
     return S_OK;
 }
 
-void Render() {
-    m_pDeviceContext->OMSetRenderTargets(1, &g_pRenderTargetView, g_pDepthStencilView);
+void RenderImGui() {
+    ImGui_ImplDX11_NewFrame();
+    ImGui_ImplWin32_NewFrame();
+    ImGui::NewFrame();
 
-    m_pDeviceContext->ClearRenderTargetView(g_pRenderTargetView, g_ClearColor);
+    ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(60, 40), ImGuiCond_FirstUseEver);
+
+    ImGui::Begin("Options");
+    ImGui::Checkbox("Grayscale Filter", &g_EnablePostProcessFilter);
+    ImGui::Checkbox("Frustum Culling", &g_EnableFrustumCulling);
+    ImGui::Text("Total cubes: %d", g_totalInstances);
+    ImGui::Text("Visible cubes: %d", g_finalInstanceCount);
+    ImGui::End();
+
+    ImGui::Render();
+    ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+}
+
+// Prepares a render target for drawing
+void PrepareRenderTarget(ID3D11RenderTargetView* rtv) {
+    m_pDeviceContext->OMSetRenderTargets(1, &rtv, g_pDepthStencilView);
+    m_pDeviceContext->ClearRenderTargetView(rtv, g_ClearColor);
     m_pDeviceContext->ClearDepthStencilView(g_pDepthStencilView, D3D11_CLEAR_DEPTH, 1.0f, 0);
+}
 
+// Executes post-processing pass
+void ExecutePostProcessingPass() {
+    m_pDeviceContext->OMSetRenderTargets(1, &g_pRenderTargetView, nullptr);
+    m_pDeviceContext->OMSetDepthStencilState(nullptr, 0);
+
+    const UINT stride = sizeof(FullScreenVertex);
+    const UINT offset = 0;
+    m_pDeviceContext->IASetVertexBuffers(0, 1, &g_pFullScreenVB, &stride, &offset);
+    m_pDeviceContext->IASetInputLayout(g_pFullScreenLayout);
+    m_pDeviceContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+    m_pDeviceContext->VSSetShader(g_pPostProcessVS, nullptr, 0);
+    m_pDeviceContext->PSSetShader(g_pPostProcessPS, nullptr, 0);
+
+    m_pDeviceContext->PSSetShaderResources(0, 1, &g_pPostProcessSRV);
+    m_pDeviceContext->PSSetSamplers(0, 1, &g_pSamplerLinear);
+
+    m_pDeviceContext->Draw(3, 0);
+
+    // Unbind SRVs to avoid resource conflicts
+    ID3D11ShaderResourceView* nullSRV[1] = {nullptr};
+    m_pDeviceContext->PSSetShaderResources(0, 1, nullSRV);
+}
+
+void RenderScene(bool renderToBackbuffer) {
+    if (renderToBackbuffer) {
+        m_pDeviceContext->OMSetRenderTargets(1, &g_pRenderTargetView, g_pDepthStencilView);
+        m_pDeviceContext->ClearRenderTargetView(g_pRenderTargetView, g_ClearColor);
+        m_pDeviceContext->ClearDepthStencilView(g_pDepthStencilView, D3D11_CLEAR_DEPTH, 1.0f, 0);
+    }
     g_CubeAngle += 0.01f;
     if (g_CubeAngle > XM_2PI) g_CubeAngle -= XM_2PI;
     XMMATRIX model = XMMatrixRotationY(g_CubeAngle);
@@ -733,8 +983,9 @@ void Render() {
     XMVECTOR upDir = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
     XMMATRIX view = XMMatrixLookAtLH(eyePos, focusPoint, upDir);
 
+    // Compute aspect ratio and projection matrix
     RECT rc;
-    GetClientRect(FindWindow(L"Laboratory work 6", L"Laboratory work 6"), &rc);
+    GetClientRect(FindWindow(L"Laboratory work 7", L"Laboratory work 7"), &rc);
     float aspect = static_cast<float>(rc.right - rc.left) / (rc.bottom - rc.top);
     XMMATRIX proj = XMMatrixPerspectiveFovLH(XM_PIDIV4, aspect, 0.01f, 100.0f);
 
@@ -801,6 +1052,73 @@ void Render() {
         m_pDeviceContext->Unmap(g_pVPBuffer, 0);
     }
 
+    const int nearInstances = 11;
+    const int farInstances = 10;
+    const int totalInstances = nearInstances + farInstances;
+    g_totalInstances = totalInstances;
+
+
+    XMMATRIX allInstanceMatrices[totalInstances];
+
+    allInstanceMatrices[0] = XMMatrixRotationY(g_CubeAngle);
+    float nearOrbitRadius = 10.0f;
+    float nearStep = XM_2PI / 10.0f;
+    for (int i = 1; i < nearInstances; i++) {
+        float offsetAngle = (i - 1) * nearStep;
+        float orbitAngle = g_CubeAngle + offsetAngle;
+        XMMATRIX translation = XMMatrixTranslation(nearOrbitRadius * cosf(orbitAngle), 0.0f, nearOrbitRadius * sinf(orbitAngle));
+        XMMATRIX rotation = XMMatrixRotationY(g_CubeAngle);
+        allInstanceMatrices[i] = translation * rotation;
+    }
+
+    float farOrbitRadius = 40.0f;
+    float farStep = XM_2PI / farInstances;
+    for (int i = nearInstances; i < totalInstances; i++) {
+        float offsetAngle = i * farStep;
+        float orbitAngle = g_CubeAngle + offsetAngle;
+        XMMATRIX translation = XMMatrixTranslation(farOrbitRadius * cosf(orbitAngle), 0.0f, farOrbitRadius * sinf(orbitAngle));
+        XMMATRIX rotation = XMMatrixRotationY(g_CubeAngle);
+        allInstanceMatrices[i] = translation * rotation;
+    }
+
+    XMMATRIX matVP = view * proj;
+    Plane frustumPlanes[6];
+    ExtractFrustumPlanes(matVP, frustumPlanes);
+
+    for (int i = 0; i < 6; i++) {
+        float len = sqrtf(frustumPlanes[i].a * frustumPlanes[i].a +
+            frustumPlanes[i].b * frustumPlanes[i].b +
+            frustumPlanes[i].c * frustumPlanes[i].c);
+        frustumPlanes[i].a /= len;
+        frustumPlanes[i].b /= len;
+        frustumPlanes[i].c /= len;
+        frustumPlanes[i].d /= len;
+    }
+
+    XMMATRIX finalMatrices[totalInstances];
+    int finalInstanceCount = 0;
+    if (g_EnableFrustumCulling) {
+        for (int i = 0; i < totalInstances; i++) {
+            XMVECTOR center = XMVectorSet(allInstanceMatrices[i].r[3].m128_f32[0],
+                allInstanceMatrices[i].r[3].m128_f32[1],
+                allInstanceMatrices[i].r[3].m128_f32[2],
+                1.0f);
+            if (IsSphereInFrustum(frustumPlanes, center, 1.0f)) {
+                finalMatrices[finalInstanceCount++] = allInstanceMatrices[i];
+            }
+        }
+    } else {
+        memcpy(finalMatrices, allInstanceMatrices, sizeof(allInstanceMatrices));
+        finalInstanceCount = totalInstances;
+    }
+    g_finalInstanceCount = finalInstanceCount;
+    XMMATRIX finalMatricesT[totalInstances];
+    for (int i = 0; i < finalInstanceCount; i++) {
+        finalMatricesT[i] = XMMatrixTranspose(finalMatrices[i]);
+    }
+    m_pDeviceContext->UpdateSubresource(g_pModelBuffer, 0, nullptr, finalMatricesT, 0, 0);
+
+
     stride = sizeof(Vertex);
     offset = 0;
     m_pDeviceContext->IASetVertexBuffers(0, 1, &g_pVertexBuffer, &stride, &offset);
@@ -814,13 +1132,7 @@ void Render() {
     ID3D11ShaderResourceView* cubeSRVs[2] = { g_pCubeTextureRV, g_pCubeNormalTextureRV };
     m_pDeviceContext->PSSetShaderResources(0, 2, cubeSRVs);
     m_pDeviceContext->PSSetSamplers(0, 1, &g_pSamplerLinear);
-    m_pDeviceContext->Draw(ARRAYSIZE(g_CubeVertices), 0);
-
-    g_OrbitAngle += 0.005f;
-    XMMATRIX model2 = XMMatrixRotationZ(g_OrbitAngle) * XMMatrixTranslation(4.0f, 0.0f, 0.0f) * XMMatrixRotationZ(-g_OrbitAngle);
-    XMMATRIX model2T = XMMatrixTranspose(model2);
-    m_pDeviceContext->UpdateSubresource(g_pModelBuffer, 0, nullptr, &model2T, 0, 0);
-    m_pDeviceContext->Draw(ARRAYSIZE(g_CubeVertices), 0);
+    m_pDeviceContext->DrawInstanced(ARRAYSIZE(g_CubeVertices), finalInstanceCount, 0, 0);
 
     float blendFactor[4] = {0, 0, 0, 0};
     m_pDeviceContext->OMSetBlendState(g_pAlphaBlendState, blendFactor, 0xFFFFFFFF);
@@ -905,11 +1217,51 @@ void Render() {
     XMFLOAT4 lightColor1(1.0f, 1.0f, 1.0f, 1.0f);
     m_pDeviceContext->UpdateSubresource(g_pLightColorBuffer, 0, nullptr, &lightColor1, 0, 0);
     m_pDeviceContext->Draw(ARRAYSIZE(g_CubeVertices), 0);
+}
+
+void Render() {
+    if (g_EnablePostProcessFilter) {
+        PrepareRenderTarget(g_pPostProcessRTV);
+        RenderScene(false);
+        ExecutePostProcessingPass();
+    } else {
+        PrepareRenderTarget(g_pRenderTargetView);
+        RenderScene(true);
+    }
+
+    if (g_EnablePostProcessFilter) {
+        m_pDeviceContext->OMSetRenderTargets(1, &g_pRenderTargetView, nullptr);
+
+        m_pDeviceContext->OMSetDepthStencilState(nullptr, 0);
+
+        UINT stride = sizeof(FullScreenVertex);
+        UINT offset = 0;
+        m_pDeviceContext->IASetVertexBuffers(0, 1, &g_pFullScreenVB, &stride, &offset);
+        m_pDeviceContext->IASetInputLayout(g_pFullScreenLayout);
+        m_pDeviceContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+        m_pDeviceContext->VSSetShader(g_pPostProcessVS, nullptr, 0);
+        m_pDeviceContext->PSSetShader(g_pPostProcessPS, nullptr, 0);
+
+        m_pDeviceContext->PSSetShaderResources(0, 1, &g_pPostProcessSRV);
+        m_pDeviceContext->PSSetSamplers(0, 1, &g_pSamplerLinear);
+
+        m_pDeviceContext->Draw(3, 0);
+
+        ID3D11ShaderResourceView *nullSRV[1] = {nullptr};
+        m_pDeviceContext->PSSetShaderResources(0, 1, nullSRV);
+    }
+
+    RenderImGui();
 
     g_pSwapChain->Present(1, 0);
 }
 
 void CleanupDevice() {
+    ImGui_ImplDX11_Shutdown();
+    ImGui_ImplWin32_Shutdown();
+    ImGui::DestroyContext();
+
     if (m_pDeviceContext) m_pDeviceContext->ClearState();
     if (g_pVertexBuffer) g_pVertexBuffer->Release();
     if (g_pVertexLayout) g_pVertexLayout->Release();
@@ -941,4 +1293,11 @@ void CleanupDevice() {
     if (g_pPinkColorBuffer) g_pPinkColorBuffer->Release();
     if (g_pBlueColorBuffer) g_pBlueColorBuffer->Release();
     if (g_pTransparentVS) g_pTransparentVS->Release();
+    if (g_pPostProcessTex) g_pPostProcessTex->Release();
+    if (g_pPostProcessRTV) g_pPostProcessRTV->Release();
+    if (g_pPostProcessSRV) g_pPostProcessSRV->Release();
+    if (g_pPostProcessVS) g_pPostProcessVS->Release();
+    if (g_pPostProcessPS) g_pPostProcessPS->Release();
+    if (g_pFullScreenVB) g_pFullScreenVB->Release();
+    if (g_pFullScreenLayout) g_pFullScreenLayout->Release();
 }
