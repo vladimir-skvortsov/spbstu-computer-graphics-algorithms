@@ -19,6 +19,7 @@ using namespace DirectX;
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 // Global variables
+ID3D11Buffer* g_pCullingParamsBuffer = nullptr;
 ID3D11Device* g_pd3dDevice = nullptr;
 ID3D11DeviceContext* m_pDeviceContext = nullptr;
 IDXGISwapChain* g_pSwapChain = nullptr;
@@ -41,8 +42,17 @@ ID3D11Buffer* g_pVPBuffer = nullptr;
 ID3D11ShaderResourceView* g_pCubeTextureRV = nullptr;
 ID3D11ShaderResourceView* g_pCubeNormalTextureRV = nullptr;
 ID3D11SamplerState* g_pSamplerLinear = nullptr;
+ID3D11ComputeShader* g_pCullingCS = nullptr;
+ID3D11Buffer* g_pSceneCBBuffer = nullptr;
+ID3D11Buffer* g_pIndirectArgsBuffer = nullptr;
+ID3D11Buffer* g_pObjectsIdsBuffer = nullptr;
+ID3D11UnorderedAccessView* g_pIndirectArgsUAV = nullptr;
+ID3D11UnorderedAccessView* g_pObjectsIdsUAV = nullptr;
+bool g_EnableGpuCulling = false;
+int g_visibleCubesGPU = 0;
 
 // Skybox
+ID3D11Buffer* g_pIndirectArgsStagingBuffer = nullptr;
 ID3D11VertexShader* g_pSkyboxVS = nullptr;
 ID3D11PixelShader* g_pSkyboxPS = nullptr;
 ID3D11InputLayout* g_pSkyboxInputLayout = nullptr;
@@ -86,6 +96,14 @@ float g_CameraAzimuth = 0.0f;
 float g_CameraElevation = 0.0f;
 int g_totalInstances = 0;
 int g_finalInstanceCount = 0;
+
+#define MAX_CUBES_GPU 21
+struct CullingData {
+    UINT numShapes;
+    UINT padding[3];
+    XMFLOAT4 bbMin[MAX_CUBES_GPU];
+    XMFLOAT4 bbMax[MAX_CUBES_GPU];
+};
 
 LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 HRESULT InitDevice(HWND hWnd);
@@ -144,6 +162,11 @@ struct Vertex {
     XMFLOAT3 position;
     XMFLOAT3 normal;
     float u, v;
+};
+
+struct SceneCBData {
+    XMFLOAT4X4 viewProjectionMatrix;
+    XMFLOAT4 planes[6];
 };
 
 struct SkyboxVertex {
@@ -558,6 +581,81 @@ HRESULT CreateCubeResources() {
     if (FAILED(hr))
         return hr;
 
+    ID3DBlob* pBlobCS = nullptr;
+    ID3DBlob* pErrorBlobCS = nullptr;
+    hr = D3DCompileFromFile(
+        L"gpu_culling.hlsl",
+        nullptr,
+        D3D_COMPILE_STANDARD_FILE_INCLUDE,
+        "main",
+        "cs_5_0",
+        0,
+        0,
+        &pBlobCS,
+        &pErrorBlobCS);
+    if (FAILED(hr))
+        return hr;
+
+    hr = g_pd3dDevice->CreateComputeShader(pBlobCS->GetBufferPointer(), pBlobCS->GetBufferSize(), nullptr, &g_pCullingCS);
+    pBlobCS->Release();
+    if (FAILED(hr))
+        return hr;
+
+    D3D11_BUFFER_DESC bufDesc = {};
+    bufDesc.Usage = D3D11_USAGE_DEFAULT;
+    bufDesc.ByteWidth = sizeof(UINT) * 4;
+    bufDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+    bufDesc.CPUAccessFlags = 0;
+    bufDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+    bufDesc.StructureByteStride = sizeof(UINT);
+
+    hr = g_pd3dDevice->CreateBuffer(&bufDesc, nullptr, &g_pIndirectArgsBuffer);
+    if (FAILED(hr))
+        return hr;
+
+    D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+    uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+    uavDesc.Buffer.FirstElement = 0;
+    uavDesc.Buffer.NumElements = 4;
+    uavDesc.Format = DXGI_FORMAT_UNKNOWN;
+
+    hr = g_pd3dDevice->CreateUnorderedAccessView(g_pIndirectArgsBuffer, &uavDesc, &g_pIndirectArgsUAV);
+    if (FAILED(hr))
+        return hr;
+
+
+    D3D11_BUFFER_DESC cullingParamsDesc = {};
+    cullingParamsDesc.Usage = D3D11_USAGE_DEFAULT;
+    cullingParamsDesc.ByteWidth = sizeof(CullingData);
+    cullingParamsDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    cullingParamsDesc.CPUAccessFlags = 0;
+    cullingParamsDesc.MiscFlags = 0;
+
+    hr = g_pd3dDevice->CreateBuffer(&cullingParamsDesc, nullptr, &g_pCullingParamsBuffer);
+    if (FAILED(hr))
+        return hr;
+
+    D3D11_BUFFER_DESC stagingDesc = {};
+    stagingDesc.Usage = D3D11_USAGE_STAGING;
+    stagingDesc.ByteWidth = sizeof(UINT) * 4;
+    stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    stagingDesc.BindFlags = 0;
+    stagingDesc.MiscFlags = 0;
+    hr = g_pd3dDevice->CreateBuffer(&stagingDesc, nullptr, &g_pIndirectArgsStagingBuffer);
+    if (FAILED(hr))
+        return hr;
+
+    D3D11_BUFFER_DESC sceneDesc = {};
+    sceneDesc.Usage = D3D11_USAGE_DEFAULT;
+    sceneDesc.ByteWidth = sizeof(SceneCBData);
+    sceneDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    sceneDesc.CPUAccessFlags = 0;
+    sceneDesc.MiscFlags = 0;
+
+    hr = g_pd3dDevice->CreateBuffer(&sceneDesc, nullptr, &g_pSceneCBBuffer);
+    if (FAILED(hr))
+        return hr;
+
     ibd.Usage = D3D11_USAGE_DEFAULT;
     const int numInstances = 21;
     ibd.ByteWidth = sizeof(XMMATRIX) * numInstances;
@@ -923,9 +1021,11 @@ void RenderImGui() {
 
     ImGui::Begin("Options");
     ImGui::Checkbox("Grayscale Filter", &g_EnablePostProcessFilter);
-    ImGui::Checkbox("Frustum Culling", &g_EnableFrustumCulling);
+    ImGui::Checkbox("CPU Culling", &g_EnableFrustumCulling);
+    ImGui::Checkbox("GPU Culling", &g_EnableGpuCulling);
     ImGui::Text("Total cubes: %d", g_totalInstances);
-    ImGui::Text("Visible cubes: %d", g_finalInstanceCount);
+    ImGui::Text("Visible cubes (CPU): %d", g_finalInstanceCount);
+    ImGui::Text("Visible cubes (GPU): %d", g_visibleCubesGPU);
     ImGui::End();
 
     ImGui::Render();
@@ -1095,28 +1195,95 @@ void RenderScene(bool renderToBackbuffer) {
         frustumPlanes[i].d /= len;
     }
 
-    XMMATRIX finalMatrices[totalInstances];
-    int finalInstanceCount = 0;
-    if (g_EnableFrustumCulling) {
-        for (int i = 0; i < totalInstances; i++) {
-            XMVECTOR center = XMVectorSet(allInstanceMatrices[i].r[3].m128_f32[0],
-                allInstanceMatrices[i].r[3].m128_f32[1],
-                allInstanceMatrices[i].r[3].m128_f32[2],
-                1.0f);
-            if (IsSphereInFrustum(frustumPlanes, center, 1.0f)) {
-                finalMatrices[finalInstanceCount++] = allInstanceMatrices[i];
-            }
+    if (g_EnableGpuCulling) {
+        CullingData cullingData = {};
+        cullingData.numShapes = totalInstances;
+        for (int i = 0; i < totalInstances && i < MAX_CUBES_GPU; i++) {
+            XMVECTOR center = allInstanceMatrices[i].r[3];
+            XMVECTOR offset = XMVectorSet(0.5f, 0.5f, 0.5f, 0.0f);
+            XMVECTOR minV = XMVectorSubtract(center, offset);
+            XMVECTOR maxV = XMVectorAdd(center, offset);
+            XMStoreFloat4(&cullingData.bbMin[i], minV);
+            XMStoreFloat4(&cullingData.bbMax[i], maxV);
         }
+        m_pDeviceContext->UpdateSubresource(g_pCullingParamsBuffer, 0, nullptr, &cullingData, 0, 0);
+
+        SceneCBData sceneData;
+        XMStoreFloat4x4(&sceneData.viewProjectionMatrix, XMMatrixTranspose(view * proj));
+        for (int i = 0; i < 6; i++) {
+            sceneData.planes[i] = XMFLOAT4(
+                frustumPlanes[i].a,
+                frustumPlanes[i].b,
+                frustumPlanes[i].c,
+                frustumPlanes[i].d
+            );
+        }
+
+        m_pDeviceContext->UpdateSubresource(g_pSceneCBBuffer, 0, nullptr, &sceneData, 0, 0);
+        m_pDeviceContext->CSSetConstantBuffers(1, 1, &g_pSceneCBBuffer);
+
+        UINT clearVals[4] = { 0, 0, 0, 0 };
+        m_pDeviceContext->ClearUnorderedAccessViewUint(g_pIndirectArgsUAV, clearVals);
+
+        m_pDeviceContext->CSSetShader(g_pCullingCS, nullptr, 0);
+        m_pDeviceContext->CSSetConstantBuffers(0, 1, &g_pCullingParamsBuffer);
+        m_pDeviceContext->CSSetUnorderedAccessViews(0, 1, &g_pIndirectArgsUAV, nullptr);
+        m_pDeviceContext->CSSetUnorderedAccessViews(1, 1, &g_pObjectsIdsUAV, nullptr);
+
+        UINT numGroups = (totalInstances + 63) / 64;
+        m_pDeviceContext->Dispatch(numGroups, 1, 1);
+
+        ID3D11UnorderedAccessView* nullUAV[2] = { nullptr, nullptr };
+        m_pDeviceContext->CSSetUnorderedAccessViews(0, 2, nullUAV, nullptr);
+        m_pDeviceContext->CSSetShader(nullptr, nullptr, 0);
+
+        m_pDeviceContext->CopyResource(g_pIndirectArgsStagingBuffer, g_pIndirectArgsBuffer);
+
+        D3D11_MAPPED_SUBRESOURCE mapped = {};
+        HRESULT hr = m_pDeviceContext->Map(g_pIndirectArgsStagingBuffer, 0, D3D11_MAP_READ, 0, &mapped);
+        UINT visibleCount = 0;
+        if (SUCCEEDED(hr)) {
+            UINT* pData = (UINT*)mapped.pData;
+            visibleCount = pData[1];
+            m_pDeviceContext->Unmap(g_pIndirectArgsStagingBuffer, 0);
+        }
+        g_visibleCubesGPU = visibleCount;
+
+        XMMATRIX allMatricesT[totalInstances];
+        for (int i = 0; i < totalInstances; i++) {
+            allMatricesT[i] = XMMatrixTranspose(allInstanceMatrices[i]);
+        }
+        m_pDeviceContext->UpdateSubresource(g_pModelBuffer, 0, nullptr, allMatricesT, 0, 0);
+
+        m_pDeviceContext->DrawInstanced(ARRAYSIZE(g_CubeVertices), visibleCount, 0, 0);
     } else {
-        memcpy(finalMatrices, allInstanceMatrices, sizeof(allInstanceMatrices));
-        finalInstanceCount = totalInstances;
+        XMMATRIX finalMatrices[totalInstances];
+        int finalInstanceCount = 0;
+        if (g_EnableFrustumCulling) {
+            for (int i = 0; i < totalInstances; i++) {
+                XMVECTOR center = XMVectorSet(
+                    allInstanceMatrices[i].r[3].m128_f32[0],
+                    allInstanceMatrices[i].r[3].m128_f32[1],
+                    allInstanceMatrices[i].r[3].m128_f32[2],
+                    1.0f
+                );
+                if (IsSphereInFrustum(frustumPlanes, center, 1.0f)) {
+                    finalMatrices[finalInstanceCount++] = allInstanceMatrices[i];
+                }
+            }
+        } else {
+            memcpy(finalMatrices, allInstanceMatrices, sizeof(allInstanceMatrices));
+            finalInstanceCount = totalInstances;
+        }
+        g_finalInstanceCount = finalInstanceCount;
+        g_visibleCubesGPU = totalInstances;
+        XMMATRIX finalMatricesT[totalInstances];
+        for (int i = 0; i < finalInstanceCount; i++) {
+            finalMatricesT[i] = XMMatrixTranspose(finalMatrices[i]);
+        }
+        m_pDeviceContext->UpdateSubresource(g_pModelBuffer, 0, nullptr, finalMatricesT, 0, 0);
+        m_pDeviceContext->DrawInstanced(ARRAYSIZE(g_CubeVertices), finalInstanceCount, 0, 0);
     }
-    g_finalInstanceCount = finalInstanceCount;
-    XMMATRIX finalMatricesT[totalInstances];
-    for (int i = 0; i < finalInstanceCount; i++) {
-        finalMatricesT[i] = XMMatrixTranspose(finalMatrices[i]);
-    }
-    m_pDeviceContext->UpdateSubresource(g_pModelBuffer, 0, nullptr, finalMatricesT, 0, 0);
 
 
     stride = sizeof(Vertex);
@@ -1132,7 +1299,7 @@ void RenderScene(bool renderToBackbuffer) {
     ID3D11ShaderResourceView* cubeSRVs[2] = { g_pCubeTextureRV, g_pCubeNormalTextureRV };
     m_pDeviceContext->PSSetShaderResources(0, 2, cubeSRVs);
     m_pDeviceContext->PSSetSamplers(0, 1, &g_pSamplerLinear);
-    m_pDeviceContext->DrawInstanced(ARRAYSIZE(g_CubeVertices), finalInstanceCount, 0, 0);
+    m_pDeviceContext->DrawInstanced(ARRAYSIZE(g_CubeVertices), g_finalInstanceCount, 0, 0);
 
     float blendFactor[4] = {0, 0, 0, 0};
     m_pDeviceContext->OMSetBlendState(g_pAlphaBlendState, blendFactor, 0xFFFFFFFF);
@@ -1300,4 +1467,12 @@ void CleanupDevice() {
     if (g_pPostProcessPS) g_pPostProcessPS->Release();
     if (g_pFullScreenVB) g_pFullScreenVB->Release();
     if (g_pFullScreenLayout) g_pFullScreenLayout->Release();
+    if (g_pCullingCS) g_pCullingCS->Release();
+    if (g_pCullingParamsBuffer) g_pCullingParamsBuffer->Release();
+    if (g_pIndirectArgsBuffer) g_pIndirectArgsBuffer->Release();
+    if (g_pIndirectArgsUAV) g_pIndirectArgsUAV->Release();
+    if (g_pObjectsIdsBuffer) g_pObjectsIdsBuffer->Release();
+    if (g_pObjectsIdsUAV) g_pObjectsIdsUAV->Release();
+    if (g_pIndirectArgsStagingBuffer) g_pIndirectArgsStagingBuffer->Release();
+    if (g_pSceneCBBuffer) g_pSceneCBBuffer->Release();
 }
