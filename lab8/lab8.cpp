@@ -298,13 +298,13 @@ int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow) {
     wcex.lpfnWndProc = WndProc;
     wcex.hInstance = hInstance;
     wcex.hbrBackground = nullptr;
-    wcex.lpszClassName = L"Laboratory work 7";
+    wcex.lpszClassName = L"Laboratory work 8";
 
     RegisterClassExW(&wcex);
 
     HWND hWnd = CreateWindowW(
-        L"Laboratory work 7",
-        L"Laboratory work 7",
+        L"Laboratory work 8",
+        L"Laboratory work 8",
         WS_OVERLAPPEDWINDOW,
         100,
         100,
@@ -1004,7 +1004,7 @@ HRESULT CreateCubeResources() {
 
     ImGui::StyleColorsDark();
 
-    ImGui_ImplWin32_Init(FindWindow(L"Laboratory work 7", L"Laboratory work 7"));
+    ImGui_ImplWin32_Init(FindWindow(L"Laboratory work 8", L"Laboratory work 8"));
 
     ImGui_ImplDX11_Init(g_pd3dDevice, m_pDeviceContext);
 
@@ -1085,7 +1085,7 @@ void RenderScene(bool renderToBackbuffer) {
 
     // Compute aspect ratio and projection matrix
     RECT rc;
-    GetClientRect(FindWindow(L"Laboratory work 7", L"Laboratory work 7"), &rc);
+    GetClientRect(FindWindow(L"Laboratory work 8", L"Laboratory work 8"), &rc);
     float aspect = static_cast<float>(rc.right - rc.left) / (rc.bottom - rc.top);
     XMMATRIX proj = XMMatrixPerspectiveFovLH(XM_PIDIV4, aspect, 0.01f, 100.0f);
 
