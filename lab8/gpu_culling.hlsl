@@ -1,6 +1,8 @@
 cbuffer CullingParams : register(b0) {
     uint numShapes;
-    uint _padding[3];
+    uint pad0;
+    uint pad1;
+    uint pad2;
     float4 bbMin[21];
     float4 bbMax[21];
 };
