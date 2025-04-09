@@ -1162,7 +1162,7 @@ void RenderScene(bool renderToBackbuffer) {
 
     allInstanceMatrices[0] = XMMatrixRotationY(g_CubeAngle);
     float nearOrbitRadius = 10.0f;
-    float nearStep = XM_2PI / 10.0f;
+    float nearStep = XM_2PI / nearInstances;
     for (int i = 1; i < nearInstances; i++) {
         float offsetAngle = (i - 1) * nearStep;
         float orbitAngle = g_CubeAngle + offsetAngle;
